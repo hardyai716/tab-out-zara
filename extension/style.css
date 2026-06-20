@@ -1068,6 +1068,56 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   }
 }
 
+/* ---- Deferred group tabs + item sorting ---- */
+.deferred-group-controls {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.deferred-group-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.deferred-group-tab {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--card-bg);
+  border: 1px solid var(--warm-gray);
+  border-radius: 999px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 0.16s, border-color 0.16s, color 0.16s, transform 0.16s, box-shadow 0.16s;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.deferred-group-tab:hover {
+  border-color: rgba(90, 122, 98, 0.35);
+  color: var(--ink);
+}
+
+.deferred-group-tab.active {
+  color: var(--accent-sage);
+  border-color: rgba(90, 122, 98, 0.35);
+  background: rgba(90, 122, 98, 0.08);
+}
+
+.deferred-group-count {
+  font-size: 10px;
+  color: var(--muted);
+  background: rgba(154, 145, 138, 0.12);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
 /* ---- Checklist items ---- */
 .deferred-item {
   display: flex;
@@ -1076,6 +1126,44 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   padding: 10px 0;
   border-bottom: 1px solid rgba(154, 145, 138, 0.12);
   animation: fadeUp 0.3s ease both;
+}
+
+.deferred-item.sorting {
+  border-radius: 10px;
+  padding: 10px 8px;
+  background: rgba(90, 122, 98, 0.04);
+  cursor: default;
+}
+
+.deferred-item.dragging {
+  opacity: 0.72;
+  transform: scale(1.01);
+  box-shadow: 0 8px 24px var(--shadow);
+  border-bottom-color: transparent;
+}
+
+.deferred-item-drag {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(90, 122, 98, 0.2);
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.08);
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+  margin-top: -2px;
+}
+
+.deferred-item-drag:active {
+  cursor: grabbing;
+}
+
+.deferred-item-dragging {
+  cursor: grabbing;
 }
 
 .deferred-item:last-child {

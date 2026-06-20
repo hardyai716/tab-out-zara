@@ -93,6 +93,13 @@
         <div class="section-count" id="deferredCount"></div>
       </div>
 
+      <div class="deferred-group-controls" id="deferredGroupControls" style="display:none">
+        <button class="action-btn" data-action="toggle-deferred-group-sort" id="deferredSortToggle">调整优先级</button>
+        <button class="action-btn" data-action="reset-deferred-group-sort" id="deferredSortReset">恢复默认</button>
+      </div>
+
+      <div class="deferred-group-tabs" id="deferredGroupTabs" style="display:none"></div>
+
       <!-- Active checklist items — injected by renderDeferredList() in app.js -->
       <div class="deferred-list" id="deferredList"></div>
 

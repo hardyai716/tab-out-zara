@@ -27,9 +27,13 @@
 let openTabs = [];
 
 const REALTIME_REFRESH_DEBOUNCE_MS = 250;
+const DEFERRED_ALL_GROUP_ID = '__all__';
 let realtimeRefreshTimer = null;
 let dashboardRenderPromise = null;
 let dashboardRenderQueued = false;
+let selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
+let isDeferredItemSorting = false;
+let deferredItemDragState = null;
 
 /**
  * fetchOpenTabs()
@@ -217,6 +221,7 @@ async function closeTabOutDupes() {
        url: "https://example.com",
        title: "Example Page",
        savedAt: "2026-04-04T10:00:00.000Z",  // ISO date string
+       sortIndex: 0,                 // optional custom order within same-domain group
        completed: false,             // true = checked off (archived)
        dismissed: false              // true = dismissed without reading
      },
@@ -1021,6 +1026,126 @@ function renderDomainCard(group) {
    SAVED FOR LATER — Render Checklist Column
    ---------------------------------------------------------------- */
 
+function getDeferredGroupId(item) {
+  try {
+    return new URL(item.url).hostname.replace(/^www\./, '') || '其他';
+  } catch {
+    return '其他';
+  }
+}
+
+function buildDeferredGroups(activeItems) {
+  const groupsById = new Map();
+
+  for (const item of activeItems) {
+    const groupId = getDeferredGroupId(item);
+    if (!groupsById.has(groupId)) {
+      groupsById.set(groupId, {
+        id: groupId,
+        label: groupId,
+        items: [],
+        createdAt: item.savedAt || new Date().toISOString(),
+      });
+    }
+
+    const group = groupsById.get(groupId);
+    group.items.push(item);
+    if (item.savedAt && item.savedAt < group.createdAt) group.createdAt = item.savedAt;
+  }
+
+  return [...groupsById.values()].sort((a, b) => {
+    const byCreated = String(a.createdAt).localeCompare(String(b.createdAt));
+    if (byCreated !== 0) return byCreated;
+    return a.label.localeCompare(b.label);
+  });
+}
+
+function applyDeferredItemOrder(items) {
+  return [...items].sort((a, b) => {
+    const aCustom = Number.isFinite(a.sortIndex);
+    const bCustom = Number.isFinite(b.sortIndex);
+    if (aCustom && bCustom) return a.sortIndex - b.sortIndex;
+    if (aCustom !== bCustom) return aCustom ? -1 : 1;
+    return String(a.savedAt || '').localeCompare(String(b.savedAt || ''));
+  });
+}
+
+function hasCustomDeferredItemOrder(items) {
+  return items.some(item => Number.isFinite(item.sortIndex));
+}
+
+async function saveDeferredItemOrderFromDom() {
+  const rows = [...document.querySelectorAll('.deferred-item')];
+  const orderedIds = rows.map(row => row.dataset.deferredId).filter(Boolean);
+  const orderById = new Map(orderedIds.map((id, index) => [id, index]));
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+
+  for (const item of deferred) {
+    if (orderById.has(item.id)) item.sortIndex = orderById.get(item.id);
+  }
+
+  await chrome.storage.local.set({ deferred });
+}
+
+async function resetDeferredItemSort(groupId) {
+  if (!groupId || groupId === DEFERRED_ALL_GROUP_ID) return;
+
+  isDeferredItemSorting = false;
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+
+  for (const item of deferred) {
+    if (getDeferredGroupId(item) === groupId) delete item.sortIndex;
+  }
+
+  await chrome.storage.local.set({ deferred });
+  await renderDeferredColumn();
+}
+
+function renderDeferredSortControls(visibleActive) {
+  const controls = document.getElementById('deferredGroupControls');
+  const toggle   = document.getElementById('deferredSortToggle');
+  const reset    = document.getElementById('deferredSortReset');
+  if (!controls) return;
+
+  const canSortItems = selectedDeferredGroupId !== DEFERRED_ALL_GROUP_ID && visibleActive.length > 1;
+  controls.style.display = canSortItems ? 'flex' : 'none';
+  if (!canSortItems) {
+    isDeferredItemSorting = false;
+    return;
+  }
+
+  if (toggle) toggle.textContent = isDeferredItemSorting ? '完成排序' : '调整优先级';
+  if (reset) reset.style.display = hasCustomDeferredItemOrder(visibleActive) ? 'inline-flex' : 'none';
+}
+
+function renderDeferredGroupTabs(groups, activeCount) {
+  const tabsEl   = document.getElementById('deferredGroupTabs');
+  if (!tabsEl) return;
+
+  const hasGroups = groups.length > 0;
+  tabsEl.style.display = hasGroups ? 'flex' : 'none';
+
+  const allActive = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID ? ' active' : '';
+  const groupTabs = groups.map(group => {
+    const active = selectedDeferredGroupId === group.id ? ' active' : '';
+    const safeId = escapeHtml(group.id);
+    const safeLabel = escapeHtml(group.label);
+
+    return `
+      <button class="deferred-group-tab${active}" data-action="select-deferred-group" data-deferred-group-id="${safeId}" type="button">
+        <span class="deferred-group-label">${safeLabel}</span>
+        <span class="deferred-group-count">${group.items.length}</span>
+      </button>`;
+  }).join('');
+
+  tabsEl.innerHTML = `
+    <button class="deferred-group-tab is-all${allActive}" data-action="select-deferred-group" data-deferred-group-id="${DEFERRED_ALL_GROUP_ID}" type="button">
+      <span class="deferred-group-label">全部</span>
+      <span class="deferred-group-count">${activeCount}</span>
+    </button>
+    ${groupTabs}`;
+}
+
 /**
  * renderDeferredColumn()
  *
@@ -1049,17 +1174,39 @@ async function renderDeferredColumn() {
     }
 
     column.style.display = 'block';
+    const groups = buildDeferredGroups(active);
+    const groupIds = new Set(groups.map(group => group.id));
+
+    if (selectedDeferredGroupId !== DEFERRED_ALL_GROUP_ID && !groupIds.has(selectedDeferredGroupId)) {
+      selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
+      isDeferredItemSorting = false;
+    }
+
+    renderDeferredGroupTabs(groups, active.length);
 
     // Render active checklist items
     if (active.length > 0) {
-      countEl.textContent = `${active.length} 项`;
-      list.innerHTML = active.map(item => renderDeferredItem(item)).join('');
+      const selectedGroup = groups.find(group => group.id === selectedDeferredGroupId);
+      const visibleActiveRaw = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
+        ? active
+        : (selectedGroup ? selectedGroup.items : active);
+      const visibleActive = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
+        ? visibleActiveRaw
+        : applyDeferredItemOrder(visibleActiveRaw);
+
+      countEl.textContent = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
+        ? `${active.length} 项`
+        : `${visibleActive.length}/${active.length} 项`;
+      renderDeferredSortControls(visibleActive);
+      list.innerHTML = visibleActive.map(item => renderDeferredItem(item)).join('');
       list.style.display = 'block';
       empty.style.display = 'none';
     } else {
       list.style.display = 'none';
       countEl.textContent = '';
       empty.style.display = 'block';
+      renderDeferredGroupTabs([], 0);
+      renderDeferredSortControls([]);
     }
 
     // Render archive section
@@ -1088,10 +1235,15 @@ function renderDeferredItem(item) {
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
   const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
   const ago = timeAgo(item.savedAt);
+  const sortClass = isDeferredItemSorting ? ' sorting' : '';
+  const handle = isDeferredItemSorting
+    ? '<button class="deferred-item-drag" type="button" title="拖拽调整优先级" aria-label="拖拽调整优先级">☰</button>'
+    : '';
 
   return `
-    <div class="deferred-item" data-deferred-id="${item.id}">
-      <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}">
+    <div class="deferred-item${sortClass}" data-deferred-id="${item.id}">
+      ${handle}
+      <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}" ${isDeferredItemSorting ? 'disabled' : ''}>
       <div class="deferred-info">
         <a href="${item.url}" target="_blank" rel="noopener" class="deferred-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
           <img src="${faviconUrl}" alt="" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px" onerror="this.style.display='none'">${item.title || item.url}
@@ -1496,6 +1648,40 @@ document.addEventListener('click', async (e) => {
     return;
   }
 
+  // ---- Select a saved-for-later group tab ----
+  if (action === 'select-deferred-group') {
+    if (isDeferredItemSorting) return;
+    selectedDeferredGroupId = actionEl.dataset.deferredGroupId || DEFERRED_ALL_GROUP_ID;
+    await renderDeferredColumn();
+    return;
+  }
+
+  // ---- Toggle saved-for-later item sorting mode ----
+  if (action === 'toggle-deferred-group-sort') {
+    if (selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID) return;
+
+    if (isDeferredItemSorting) {
+      await saveDeferredItemOrderFromDom();
+      isDeferredItemSorting = false;
+      showToast('优先级顺序已保存');
+    } else {
+      isDeferredItemSorting = true;
+    }
+    await renderDeferredColumn();
+    return;
+  }
+
+  // ---- Restore default saved-for-later item sorting ----
+  if (action === 'reset-deferred-group-sort') {
+    if (selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID) return;
+
+    const confirmed = window.confirm('确认恢复当前分组内网页的默认排序吗？');
+    if (!confirmed) return;
+    await resetDeferredItemSort(selectedDeferredGroupId);
+    showToast('已恢复默认排序');
+    return;
+  }
+
   // ---- Close duplicate Tab Out tabs ----
   if (action === 'close-tabout-dupes') {
     await closeTabOutDupes();
@@ -1756,6 +1942,64 @@ document.addEventListener('click', (e) => {
   if (body) {
     body.style.display = body.style.display === 'none' ? 'block' : 'none';
   }
+});
+
+function getDeferredItemDropTarget(container, y) {
+  const items = [...container.querySelectorAll('.deferred-item:not(.dragging)')];
+  return items.find(item => {
+    const rect = item.getBoundingClientRect();
+    return y < rect.top + rect.height / 2;
+  }) || null;
+}
+
+// ---- Deferred item drag sorting — Pointer Events support mouse + touch ----
+document.addEventListener('pointerdown', (e) => {
+  const handle = e.target.closest('.deferred-item-drag');
+  if (!handle || !isDeferredItemSorting) return;
+
+  const item = handle.closest('.deferred-item');
+  const container = document.getElementById('deferredList');
+  if (!item || !container) return;
+
+  e.preventDefault();
+  item.setPointerCapture(e.pointerId);
+  item.classList.add('dragging');
+  document.body.classList.add('deferred-item-dragging');
+  deferredItemDragState = { item, container, pointerId: e.pointerId };
+});
+
+document.addEventListener('pointermove', (e) => {
+  if (!deferredItemDragState) return;
+
+  const { item, container } = deferredItemDragState;
+  const dropTarget = getDeferredItemDropTarget(container, e.clientY);
+  if (dropTarget && dropTarget !== item) {
+    container.insertBefore(item, dropTarget);
+  } else if (!dropTarget) {
+    container.appendChild(item);
+  }
+});
+
+async function finishDeferredItemDrag() {
+  if (!deferredItemDragState) return;
+
+  const { item } = deferredItemDragState;
+  item.classList.remove('dragging');
+  document.body.classList.remove('deferred-item-dragging');
+  deferredItemDragState = null;
+  await saveDeferredItemOrderFromDom();
+}
+
+document.addEventListener('pointerup', () => {
+  finishDeferredItemDrag().catch(err => {
+    console.warn('[tab-out] Could not save deferred item order:', err);
+  });
+});
+
+document.addEventListener('pointercancel', () => {
+  finishDeferredItemDrag().catch(err => {
+    console.warn('[tab-out] Could not save deferred item order:', err);
+  });
 });
 
 // ---- Quick link form — add or edit a custom navigation shortcut ----
