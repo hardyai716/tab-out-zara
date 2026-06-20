@@ -1068,7 +1068,7 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   }
 }
 
-/* ---- Deferred group tabs + sorting ---- */
+/* ---- Deferred group tabs + item sorting ---- */
 .deferred-group-controls {
   display: flex;
   gap: 8px;
@@ -1110,41 +1110,12 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   background: rgba(90, 122, 98, 0.08);
 }
 
-.deferred-group-tab.sorting {
-  cursor: grab;
-}
-
-.deferred-group-tab.dragging {
-  opacity: 0.72;
-  transform: scale(1.04);
-  box-shadow: 0 8px 24px var(--shadow);
-  border-color: var(--accent-sage);
-  cursor: grabbing;
-}
-
-.deferred-group-drag {
-  width: 16px;
-  height: 16px;
-  border-radius: 4px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--accent-sage);
-  background: rgba(90, 122, 98, 0.08);
-  cursor: grab;
-  touch-action: none;
-}
-
 .deferred-group-count {
   font-size: 10px;
   color: var(--muted);
   background: rgba(154, 145, 138, 0.12);
   border-radius: 999px;
   padding: 1px 6px;
-}
-
-.deferred-group-dragging {
-  cursor: grabbing;
 }
 
 /* ---- Checklist items ---- */
@@ -1155,6 +1126,44 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   padding: 10px 0;
   border-bottom: 1px solid rgba(154, 145, 138, 0.12);
   animation: fadeUp 0.3s ease both;
+}
+
+.deferred-item.sorting {
+  border-radius: 10px;
+  padding: 10px 8px;
+  background: rgba(90, 122, 98, 0.04);
+  cursor: default;
+}
+
+.deferred-item.dragging {
+  opacity: 0.72;
+  transform: scale(1.01);
+  box-shadow: 0 8px 24px var(--shadow);
+  border-bottom-color: transparent;
+}
+
+.deferred-item-drag {
+  width: 24px;
+  height: 24px;
+  border: 1px solid rgba(90, 122, 98, 0.2);
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.08);
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+  margin-top: -2px;
+}
+
+.deferred-item-drag:active {
+  cursor: grabbing;
+}
+
+.deferred-item-dragging {
+  cursor: grabbing;
 }
 
 .deferred-item:last-child {

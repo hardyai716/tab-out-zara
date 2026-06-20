@@ -32,8 +32,8 @@ let realtimeRefreshTimer = null;
 let dashboardRenderPromise = null;
 let dashboardRenderQueued = false;
 let selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
-let isDeferredGroupSorting = false;
-let deferredGroupDragState = null;
+let isDeferredItemSorting = false;
+let deferredItemDragState = null;
 
 /**
  * fetchOpenTabs()
@@ -221,6 +221,7 @@ async function closeTabOutDupes() {
        url: "https://example.com",
        title: "Example Page",
        savedAt: "2026-04-04T10:00:00.000Z",  // ISO date string
+       sortIndex: 0,                 // optional custom order within same-domain group
        completed: false,             // true = checked off (archived)
        dismissed: false              // true = dismissed without reading
      },
@@ -1059,79 +1060,79 @@ function buildDeferredGroups(activeItems) {
   });
 }
 
-async function getDeferredGroupSortPrefs() {
-  const {
-    deferredGroupOrder = [],
-    deferredGroupSortMode = 'default',
-  } = await chrome.storage.local.get(['deferredGroupOrder', 'deferredGroupSortMode']);
-
-  return {
-    order: Array.isArray(deferredGroupOrder) ? deferredGroupOrder : [],
-    mode: deferredGroupSortMode === 'custom' ? 'custom' : 'default',
-  };
-}
-
-function applyDeferredGroupOrder(groups, prefs) {
-  if (prefs.mode !== 'custom' || prefs.order.length === 0) return groups;
-
-  const defaultRank = new Map(groups.map((group, index) => [group.id, index]));
-  const customRank = new Map(prefs.order.map((id, index) => [id, index]));
-
-  return [...groups].sort((a, b) => {
-    const aCustom = customRank.has(a.id);
-    const bCustom = customRank.has(b.id);
-    if (aCustom && bCustom) return customRank.get(a.id) - customRank.get(b.id);
+function applyDeferredItemOrder(items) {
+  return [...items].sort((a, b) => {
+    const aCustom = Number.isFinite(a.sortIndex);
+    const bCustom = Number.isFinite(b.sortIndex);
+    if (aCustom && bCustom) return a.sortIndex - b.sortIndex;
     if (aCustom !== bCustom) return aCustom ? -1 : 1;
-    return defaultRank.get(a.id) - defaultRank.get(b.id);
+    return String(a.savedAt || '').localeCompare(String(b.savedAt || ''));
   });
 }
 
-async function saveDeferredGroupOrderFromDom() {
-  const tabs = [...document.querySelectorAll('.deferred-group-tab:not(.is-all)')];
-  const order = tabs.map(tab => tab.dataset.deferredGroupId).filter(Boolean);
-  await chrome.storage.local.set({
-    deferredGroupOrder: order,
-    deferredGroupSortMode: 'custom',
-  });
+function hasCustomDeferredItemOrder(items) {
+  return items.some(item => Number.isFinite(item.sortIndex));
 }
 
-async function resetDeferredGroupSort() {
-  selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
-  isDeferredGroupSorting = false;
-  await chrome.storage.local.set({
-    deferredGroupOrder: [],
-    deferredGroupSortMode: 'default',
-  });
+async function saveDeferredItemOrderFromDom() {
+  const rows = [...document.querySelectorAll('.deferred-item')];
+  const orderedIds = rows.map(row => row.dataset.deferredId).filter(Boolean);
+  const orderById = new Map(orderedIds.map((id, index) => [id, index]));
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+
+  for (const item of deferred) {
+    if (orderById.has(item.id)) item.sortIndex = orderById.get(item.id);
+  }
+
+  await chrome.storage.local.set({ deferred });
+}
+
+async function resetDeferredItemSort(groupId) {
+  if (!groupId || groupId === DEFERRED_ALL_GROUP_ID) return;
+
+  isDeferredItemSorting = false;
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+
+  for (const item of deferred) {
+    if (getDeferredGroupId(item) === groupId) delete item.sortIndex;
+  }
+
+  await chrome.storage.local.set({ deferred });
   await renderDeferredColumn();
 }
 
-function renderDeferredGroupTabs(groups, activeCount, prefs) {
+function renderDeferredSortControls(visibleActive) {
   const controls = document.getElementById('deferredGroupControls');
-  const tabsEl   = document.getElementById('deferredGroupTabs');
   const toggle   = document.getElementById('deferredSortToggle');
   const reset    = document.getElementById('deferredSortReset');
+  if (!controls) return;
+
+  const canSortItems = selectedDeferredGroupId !== DEFERRED_ALL_GROUP_ID && visibleActive.length > 1;
+  controls.style.display = canSortItems ? 'flex' : 'none';
+  if (!canSortItems) {
+    isDeferredItemSorting = false;
+    return;
+  }
+
+  if (toggle) toggle.textContent = isDeferredItemSorting ? '完成排序' : '调整优先级';
+  if (reset) reset.style.display = hasCustomDeferredItemOrder(visibleActive) ? 'inline-flex' : 'none';
+}
+
+function renderDeferredGroupTabs(groups, activeCount) {
+  const tabsEl   = document.getElementById('deferredGroupTabs');
   if (!tabsEl) return;
 
   const hasGroups = groups.length > 0;
-  const canSort = groups.length > 1;
-  if (controls) controls.style.display = canSort ? 'flex' : 'none';
   tabsEl.style.display = hasGroups ? 'flex' : 'none';
-  if (toggle) toggle.textContent = isDeferredGroupSorting ? '完成排序' : '调整顺序';
-  if (reset) reset.style.display = prefs.mode === 'custom' ? 'inline-flex' : 'none';
 
   const allActive = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID ? ' active' : '';
-  const sortClass = isDeferredGroupSorting ? ' sorting' : '';
   const groupTabs = groups.map(group => {
     const active = selectedDeferredGroupId === group.id ? ' active' : '';
     const safeId = escapeHtml(group.id);
     const safeLabel = escapeHtml(group.label);
-    const handle = isDeferredGroupSorting
-      ? '<span class="deferred-group-drag" title="拖拽调整顺序">☰</span>'
-      : '';
 
     return `
-      <button class="deferred-group-tab${active}${sortClass}" data-action="select-deferred-group" data-deferred-group-id="${safeId}" type="button">
-        ${handle}
+      <button class="deferred-group-tab${active}" data-action="select-deferred-group" data-deferred-group-id="${safeId}" type="button">
         <span class="deferred-group-label">${safeLabel}</span>
         <span class="deferred-group-count">${group.items.length}</span>
       </button>`;
@@ -1174,26 +1175,29 @@ async function renderDeferredColumn() {
 
     column.style.display = 'block';
     const groups = buildDeferredGroups(active);
-    const prefs = await getDeferredGroupSortPrefs();
-    const orderedGroups = applyDeferredGroupOrder(groups, prefs);
-    const groupIds = new Set(orderedGroups.map(group => group.id));
+    const groupIds = new Set(groups.map(group => group.id));
 
     if (selectedDeferredGroupId !== DEFERRED_ALL_GROUP_ID && !groupIds.has(selectedDeferredGroupId)) {
       selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
+      isDeferredItemSorting = false;
     }
 
-    renderDeferredGroupTabs(orderedGroups, active.length, prefs);
+    renderDeferredGroupTabs(groups, active.length);
 
     // Render active checklist items
     if (active.length > 0) {
-      const selectedGroup = orderedGroups.find(group => group.id === selectedDeferredGroupId);
-      const visibleActive = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
+      const selectedGroup = groups.find(group => group.id === selectedDeferredGroupId);
+      const visibleActiveRaw = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
         ? active
         : (selectedGroup ? selectedGroup.items : active);
+      const visibleActive = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
+        ? visibleActiveRaw
+        : applyDeferredItemOrder(visibleActiveRaw);
 
       countEl.textContent = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
         ? `${active.length} 项`
         : `${visibleActive.length}/${active.length} 项`;
+      renderDeferredSortControls(visibleActive);
       list.innerHTML = visibleActive.map(item => renderDeferredItem(item)).join('');
       list.style.display = 'block';
       empty.style.display = 'none';
@@ -1201,7 +1205,8 @@ async function renderDeferredColumn() {
       list.style.display = 'none';
       countEl.textContent = '';
       empty.style.display = 'block';
-      renderDeferredGroupTabs([], 0, prefs);
+      renderDeferredGroupTabs([], 0);
+      renderDeferredSortControls([]);
     }
 
     // Render archive section
@@ -1230,10 +1235,15 @@ function renderDeferredItem(item) {
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
   const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
   const ago = timeAgo(item.savedAt);
+  const sortClass = isDeferredItemSorting ? ' sorting' : '';
+  const handle = isDeferredItemSorting
+    ? '<button class="deferred-item-drag" type="button" title="拖拽调整优先级" aria-label="拖拽调整优先级">☰</button>'
+    : '';
 
   return `
-    <div class="deferred-item" data-deferred-id="${item.id}">
-      <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}">
+    <div class="deferred-item${sortClass}" data-deferred-id="${item.id}">
+      ${handle}
+      <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}" ${isDeferredItemSorting ? 'disabled' : ''}>
       <div class="deferred-info">
         <a href="${item.url}" target="_blank" rel="noopener" class="deferred-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
           <img src="${faviconUrl}" alt="" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px" onerror="this.style.display='none'">${item.title || item.url}
@@ -1640,30 +1650,34 @@ document.addEventListener('click', async (e) => {
 
   // ---- Select a saved-for-later group tab ----
   if (action === 'select-deferred-group') {
-    if (isDeferredGroupSorting) return;
+    if (isDeferredItemSorting) return;
     selectedDeferredGroupId = actionEl.dataset.deferredGroupId || DEFERRED_ALL_GROUP_ID;
     await renderDeferredColumn();
     return;
   }
 
-  // ---- Toggle saved-for-later group sorting mode ----
+  // ---- Toggle saved-for-later item sorting mode ----
   if (action === 'toggle-deferred-group-sort') {
-    if (isDeferredGroupSorting) {
-      await saveDeferredGroupOrderFromDom();
-      isDeferredGroupSorting = false;
-      showToast('分组顺序已保存');
+    if (selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID) return;
+
+    if (isDeferredItemSorting) {
+      await saveDeferredItemOrderFromDom();
+      isDeferredItemSorting = false;
+      showToast('优先级顺序已保存');
     } else {
-      isDeferredGroupSorting = true;
+      isDeferredItemSorting = true;
     }
     await renderDeferredColumn();
     return;
   }
 
-  // ---- Restore default saved-for-later group sorting ----
+  // ---- Restore default saved-for-later item sorting ----
   if (action === 'reset-deferred-group-sort') {
-    const confirmed = window.confirm('确认恢复稍后处理分组的默认排序吗？');
+    if (selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID) return;
+
+    const confirmed = window.confirm('确认恢复当前分组内网页的默认排序吗？');
     if (!confirmed) return;
-    await resetDeferredGroupSort();
+    await resetDeferredItemSort(selectedDeferredGroupId);
     showToast('已恢复默认排序');
     return;
   }
@@ -1930,63 +1944,61 @@ document.addEventListener('click', (e) => {
   }
 });
 
-function getDeferredGroupDropTarget(container, x, y) {
-  const tabs = [...container.querySelectorAll('.deferred-group-tab:not(.is-all):not(.dragging)')];
-  return tabs.find(tab => {
-    const rect = tab.getBoundingClientRect();
-    const isAbove = y < rect.top + rect.height / 2;
-    const isSameRowBefore = y >= rect.top && y <= rect.bottom && x < rect.left + rect.width / 2;
-    return isAbove || isSameRowBefore;
+function getDeferredItemDropTarget(container, y) {
+  const items = [...container.querySelectorAll('.deferred-item:not(.dragging)')];
+  return items.find(item => {
+    const rect = item.getBoundingClientRect();
+    return y < rect.top + rect.height / 2;
   }) || null;
 }
 
-// ---- Deferred group drag sorting — Pointer Events support mouse + touch ----
+// ---- Deferred item drag sorting — Pointer Events support mouse + touch ----
 document.addEventListener('pointerdown', (e) => {
-  const handle = e.target.closest('.deferred-group-drag');
-  if (!handle || !isDeferredGroupSorting) return;
+  const handle = e.target.closest('.deferred-item-drag');
+  if (!handle || !isDeferredItemSorting) return;
 
-  const tab = handle.closest('.deferred-group-tab');
-  const container = document.getElementById('deferredGroupTabs');
-  if (!tab || !container || tab.classList.contains('is-all')) return;
+  const item = handle.closest('.deferred-item');
+  const container = document.getElementById('deferredList');
+  if (!item || !container) return;
 
   e.preventDefault();
-  tab.setPointerCapture(e.pointerId);
-  tab.classList.add('dragging');
-  document.body.classList.add('deferred-group-dragging');
-  deferredGroupDragState = { tab, container, pointerId: e.pointerId };
+  item.setPointerCapture(e.pointerId);
+  item.classList.add('dragging');
+  document.body.classList.add('deferred-item-dragging');
+  deferredItemDragState = { item, container, pointerId: e.pointerId };
 });
 
 document.addEventListener('pointermove', (e) => {
-  if (!deferredGroupDragState) return;
+  if (!deferredItemDragState) return;
 
-  const { tab, container } = deferredGroupDragState;
-  const dropTarget = getDeferredGroupDropTarget(container, e.clientX, e.clientY);
-  if (dropTarget && dropTarget !== tab) {
-    container.insertBefore(tab, dropTarget);
+  const { item, container } = deferredItemDragState;
+  const dropTarget = getDeferredItemDropTarget(container, e.clientY);
+  if (dropTarget && dropTarget !== item) {
+    container.insertBefore(item, dropTarget);
   } else if (!dropTarget) {
-    container.appendChild(tab);
+    container.appendChild(item);
   }
 });
 
-async function finishDeferredGroupDrag() {
-  if (!deferredGroupDragState) return;
+async function finishDeferredItemDrag() {
+  if (!deferredItemDragState) return;
 
-  const { tab } = deferredGroupDragState;
-  tab.classList.remove('dragging');
-  document.body.classList.remove('deferred-group-dragging');
-  deferredGroupDragState = null;
-  await saveDeferredGroupOrderFromDom();
+  const { item } = deferredItemDragState;
+  item.classList.remove('dragging');
+  document.body.classList.remove('deferred-item-dragging');
+  deferredItemDragState = null;
+  await saveDeferredItemOrderFromDom();
 }
 
 document.addEventListener('pointerup', () => {
-  finishDeferredGroupDrag().catch(err => {
-    console.warn('[tab-out] Could not save deferred group order:', err);
+  finishDeferredItemDrag().catch(err => {
+    console.warn('[tab-out] Could not save deferred item order:', err);
   });
 });
 
 document.addEventListener('pointercancel', () => {
-  finishDeferredGroupDrag().catch(err => {
-    console.warn('[tab-out] Could not save deferred group order:', err);
+  finishDeferredItemDrag().catch(err => {
+    console.warn('[tab-out] Could not save deferred item order:', err);
   });
 });
 
