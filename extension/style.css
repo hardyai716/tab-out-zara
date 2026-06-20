@@ -463,8 +463,17 @@ header {
 /* "+N more" overflow chip */
 .page-chip-overflow {
   font-size: 12px;
-  color: var(--muted);
-  padding: 6px 4px;
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.06);
+  border: 1px dashed rgba(90, 122, 98, 0.22);
+  border-radius: 6px;
+  justify-content: center;
+  margin-top: 8px;
+  padding: 8px 10px;
+}
+
+.page-chip-overflow:hover {
+  background: rgba(90, 122, 98, 0.1);
 }
 
 /* mission-meta hidden — see above */
@@ -495,6 +504,28 @@ header {
   display: flex;
   gap: 8px;
   margin-top: 10px;
+}
+
+.domain-danger-zone {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(179, 90, 90, 0.2);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.domain-danger-hint {
+  font-size: 10px;
+  color: var(--status-abandoned);
+  opacity: 0.72;
+  letter-spacing: 0.5px;
+  white-space: nowrap;
+}
+
+.domain-close-all {
+  margin-left: auto;
 }
 
 .action-btn {
@@ -571,7 +602,7 @@ header {
 
 .quick-link-form {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) auto;
+  grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) auto auto;
   gap: 10px;
   margin-bottom: 14px;
 }
@@ -648,11 +679,21 @@ header {
   margin-top: 2px;
 }
 
+.quick-link-edit,
 .quick-link-remove {
   opacity: 0.35;
 }
 
+.quick-link-edit:hover {
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.08);
+}
+
 .quick-link-card:hover .quick-link-remove {
+  opacity: 0.7;
+}
+
+.quick-link-card:hover .quick-link-edit {
   opacity: 0.7;
 }
 
