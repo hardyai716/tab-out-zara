@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tab Out Realtime Refresh Harness</title>
+  <style>
+    body {
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      margin: 32px;
+      color: #1a1613;
+      background: #f8f5f0;
+    }
+
+    h1 {
+      font-size: 22px;
+      margin-bottom: 8px;
+    }
+
+    p {
+      color: #5f5852;
+      max-width: 720px;
+      line-height: 1.5;
+    }
+
+    .result {
+      background: #fffdf9;
+      border: 1px solid #e8e2da;
+      border-radius: 10px;
+      padding: 16px;
+      margin-top: 20px;
+      max-width: 820px;
+    }
+
+    .pass {
+      color: #2f6f3e;
+    }
+
+    .fail {
+      color: #a33d3d;
+    }
+
+    pre {
+      white-space: pre-wrap;
+      line-height: 1.45;
+      margin: 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>Tab Out Realtime Refresh Harness</h1>
+  <p>
+    This page simulates Chrome tab lifecycle events before wiring realtime refresh into
+    <code>extension/app.js</code>. It verifies that tab creation, URL/title updates,
+    and removals schedule a debounced dashboard render.
+  </p>
+
+  <div class="result">
+    <pre id="output">Running...</pre>
+  </div>
+
+  <script>
+    'use strict';
+
+    const DEBOUNCE_MS = 250;
+
+    function createFakeChromeTabs() {
+      function createEvent() {
+        const listeners = [];
+        return {
+          addListener(listener) {
+            listeners.push(listener);
+          },
+          dispatch(...args) {
+            for (const listener of listeners) listener(...args);
+          },
+          get listenerCount() {
+            return listeners.length;
+          },
+        };
+      }
+
+      return {
+        onCreated: createEvent(),
+        onUpdated: createEvent(),
+        onRemoved: createEvent(),
+      };
+    }
+
+    function createFakeTimer() {
+      let now = 0;
+      let nextId = 1;
+      const timers = new Map();
+
+      return {
+        setTimeout(fn, delay) {
+          const id = nextId++;
+          timers.set(id, { fn, dueAt: now + delay });
+          return id;
+        },
+        clearTimeout(id) {
+          timers.delete(id);
+        },
+        advance(ms) {
+          now += ms;
+          const due = [...timers.entries()]
+            .filter(([, timer]) => timer.dueAt <= now)
+            .sort((a, b) => a[1].dueAt - b[1].dueAt);
+
+          for (const [id, timer] of due) {
+            if (!timers.has(id)) continue;
+            timers.delete(id);
+            timer.fn();
+          }
+        },
+        get pendingCount() {
+          return timers.size;
+        },
+      };
+    }
+
+    function installRealtimeTabRefresh({
+      chromeTabs,
+      renderDashboard,
+      debounceMs = DEBOUNCE_MS,
+      setTimeoutFn = window.setTimeout,
+      clearTimeoutFn = window.clearTimeout,
+    }) {
+      let refreshTimer = null;
+
+      function scheduleRefresh(reason) {
+        if (refreshTimer !== null) clearTimeoutFn(refreshTimer);
+
+        refreshTimer = setTimeoutFn(() => {
+          refreshTimer = null;
+          renderDashboard(reason);
+        }, debounceMs);
+      }
+
+      chromeTabs.onCreated.addListener(() => {
+        scheduleRefresh('tab-created');
+      });
+
+      chromeTabs.onRemoved.addListener(() => {
+        scheduleRefresh('tab-removed');
+      });
+
+      chromeTabs.onUpdated.addListener((tabId, changeInfo) => {
+        const shouldRefresh =
+          Object.prototype.hasOwnProperty.call(changeInfo, 'url') ||
+          Object.prototype.hasOwnProperty.call(changeInfo, 'title') ||
+          Object.prototype.hasOwnProperty.call(changeInfo, 'status');
+
+        if (shouldRefresh) scheduleRefresh('tab-updated');
+      });
+    }
+
+    function runHarness() {
+      const lines = [];
+      const renderCalls = [];
+      const chromeTabs = createFakeChromeTabs();
+      const timer = createFakeTimer();
+
+      function assert(condition, message) {
+        if (!condition) throw new Error(message);
+        lines.push(`PASS ${message}`);
+      }
+
+      installRealtimeTabRefresh({
+        chromeTabs,
+        renderDashboard(reason) {
+          renderCalls.push(reason);
+        },
+        setTimeoutFn: timer.setTimeout,
+        clearTimeoutFn: timer.clearTimeout,
+      });
+
+      assert(chromeTabs.onCreated.listenerCount === 1, 'registers onCreated listener');
+      assert(chromeTabs.onUpdated.listenerCount === 1, 'registers onUpdated listener');
+      assert(chromeTabs.onRemoved.listenerCount === 1, 'registers onRemoved listener');
+
+      chromeTabs.onCreated.dispatch({
+        id: 101,
+        url: 'chrome://newtab/',
+        title: 'New Tab',
+      });
+      chromeTabs.onUpdated.dispatch(101, { status: 'loading' }, {
+        id: 101,
+        url: 'https://github.com/',
+      });
+      chromeTabs.onUpdated.dispatch(101, { url: 'https://github.com/zarazhangrui/tab-out' }, {
+        id: 101,
+        url: 'https://github.com/zarazhangrui/tab-out',
+      });
+
+      assert(renderCalls.length === 0, 'does not render synchronously during an event burst');
+      assert(timer.pendingCount === 1, 'keeps only one pending debounce timer for an event burst');
+
+      timer.advance(DEBOUNCE_MS - 1);
+      assert(renderCalls.length === 0, 'waits until debounce delay has elapsed');
+
+      timer.advance(1);
+      assert(renderCalls.length === 1, 'renders once after created and updated events settle');
+      assert(renderCalls[0] === 'tab-updated', 'uses the last event reason in a debounced burst');
+
+      chromeTabs.onUpdated.dispatch(101, { audible: true }, {
+        id: 101,
+        url: 'https://github.com/zarazhangrui/tab-out',
+      });
+      timer.advance(DEBOUNCE_MS);
+      assert(renderCalls.length === 1, 'ignores tab updates that do not affect dashboard content');
+
+      chromeTabs.onRemoved.dispatch(101, { windowId: 1, isWindowClosing: false });
+      timer.advance(DEBOUNCE_MS);
+      assert(renderCalls.length === 2, 'renders again after a tab is removed');
+      assert(renderCalls[1] === 'tab-removed', 'records tab removal as the refresh reason');
+
+      return lines;
+    }
+
+    const output = document.getElementById('output');
+
+    try {
+      const lines = runHarness();
+      output.className = 'pass';
+      output.textContent = `${lines.join('\n')}\n\nAll realtime refresh simulations passed.`;
+    } catch (err) {
+      output.className = 'fail';
+      output.textContent = `FAIL ${err.message}\n\n${err.stack || ''}`;
+    }
+  </script>
+</body>
+</html>
