@@ -1068,6 +1068,85 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   }
 }
 
+/* ---- Deferred group tabs + sorting ---- */
+.deferred-group-controls {
+  display: flex;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.deferred-group-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 12px;
+}
+
+.deferred-group-tab {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 12px;
+  color: var(--muted);
+  background: var(--card-bg);
+  border: 1px solid var(--warm-gray);
+  border-radius: 999px;
+  padding: 6px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  transition: background 0.16s, border-color 0.16s, color 0.16s, transform 0.16s, box-shadow 0.16s;
+  touch-action: manipulation;
+  user-select: none;
+}
+
+.deferred-group-tab:hover {
+  border-color: rgba(90, 122, 98, 0.35);
+  color: var(--ink);
+}
+
+.deferred-group-tab.active {
+  color: var(--accent-sage);
+  border-color: rgba(90, 122, 98, 0.35);
+  background: rgba(90, 122, 98, 0.08);
+}
+
+.deferred-group-tab.sorting {
+  cursor: grab;
+}
+
+.deferred-group-tab.dragging {
+  opacity: 0.72;
+  transform: scale(1.04);
+  box-shadow: 0 8px 24px var(--shadow);
+  border-color: var(--accent-sage);
+  cursor: grabbing;
+}
+
+.deferred-group-drag {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.08);
+  cursor: grab;
+  touch-action: none;
+}
+
+.deferred-group-count {
+  font-size: 10px;
+  color: var(--muted);
+  background: rgba(154, 145, 138, 0.12);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+
+.deferred-group-dragging {
+  cursor: grabbing;
+}
+
 /* ---- Checklist items ---- */
 .deferred-item {
   display: flex;
