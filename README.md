@@ -82,6 +82,17 @@ Everything runs inside the Chrome extension. No external server, no API calls, n
 
 ---
 
+## Attribution
+
+This repository is based on Zara's open source project:
+[zarazhangrui/tab-out](https://github.com/zarazhangrui/tab-out).
+
+The original project was created by [Zara](https://x.com/zarazhangrui) and
+released under the MIT License. This repository preserves that attribution and
+license.
+
+---
+
 ## License
 
 MIT
