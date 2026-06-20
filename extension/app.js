@@ -290,6 +290,88 @@ async function dismissSavedTab(id) {
 
 
 /* ----------------------------------------------------------------
+   QUICK LINKS — chrome.storage.local
+
+   User-defined navigation shortcuts shown above the open-tabs dashboard.
+   Stored under the "quickLinks" key:
+   [
+     { id, title, url, createdAt }
+   ]
+   ---------------------------------------------------------------- */
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function normalizeQuickLinkUrl(rawUrl) {
+  const trimmed = String(rawUrl || '').trim();
+  if (!trimmed) throw new Error('请输入网址');
+
+  const withProtocol = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)
+    ? trimmed
+    : `https://${trimmed}`;
+
+  let parsed;
+  try {
+    parsed = new URL(withProtocol);
+  } catch {
+    throw new Error('网址格式不正确');
+  }
+
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error('只支持 http 或 https 网址');
+  }
+
+  return parsed.href;
+}
+
+async function getQuickLinks() {
+  const { quickLinks = [] } = await chrome.storage.local.get('quickLinks');
+  return Array.isArray(quickLinks) ? quickLinks : [];
+}
+
+async function addQuickLink({ title, url }) {
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) throw new Error('请输入名称');
+
+  const normalizedUrl = normalizeQuickLinkUrl(url);
+  const quickLinks = await getQuickLinks();
+  const alreadyExists = quickLinks.some(link => link.url === normalizedUrl);
+  if (alreadyExists) throw new Error('这个网址已经在常用导航里了');
+
+  quickLinks.push({
+    id:        Date.now().toString(),
+    title:     cleanTitle,
+    url:       normalizedUrl,
+    createdAt: new Date().toISOString(),
+  });
+
+  await chrome.storage.local.set({ quickLinks });
+}
+
+async function removeQuickLink(id) {
+  const quickLinks = await getQuickLinks();
+  await chrome.storage.local.set({
+    quickLinks: quickLinks.filter(link => link.id !== id),
+  });
+}
+
+async function openQuickLink(url) {
+  if (!url) return;
+  if (typeof chrome !== 'undefined' && chrome.tabs && chrome.tabs.create) {
+    await chrome.tabs.create({ url });
+    return;
+  }
+  window.open(url, '_blank', 'noopener');
+}
+
+
+/* ----------------------------------------------------------------
    UI HELPERS
    ---------------------------------------------------------------- */
 
@@ -1012,6 +1094,56 @@ function renderArchiveItem(item) {
 
 
 /* ----------------------------------------------------------------
+   QUICK LINKS — Render Navigation Shortcuts
+   ---------------------------------------------------------------- */
+
+async function renderQuickLinks() {
+  const section = document.getElementById('quickLinksSection');
+  const grid    = document.getElementById('quickLinksGrid');
+  const countEl = document.getElementById('quickLinksCount');
+  if (!section || !grid) return;
+
+  try {
+    const quickLinks = await getQuickLinks();
+
+    if (countEl) countEl.textContent = quickLinks.length > 0 ? `${quickLinks.length} 个快捷入口` : '';
+
+    if (quickLinks.length === 0) {
+      grid.innerHTML = `
+        <div class="quick-link-empty">
+          添加常用工作台、文档、系统或项目地址，之后打开新标签页就能直接进入。
+        </div>`;
+      return;
+    }
+
+    grid.innerHTML = quickLinks.map(link => {
+      const safeTitle = escapeHtml(link.title);
+      const safeUrl   = escapeHtml(link.url);
+      let domain = '';
+      try { domain = new URL(link.url).hostname.replace(/^www\./, ''); } catch {}
+      const safeDomain = escapeHtml(domain);
+      const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32` : '';
+
+      return `
+        <div class="quick-link-card" data-action="open-quick-link" data-quick-link-url="${safeUrl}" title="${safeUrl}">
+          ${faviconUrl ? `<img class="quick-link-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+          <div class="quick-link-info">
+            <div class="quick-link-title">${safeTitle}</div>
+            <div class="quick-link-domain">${safeDomain}</div>
+          </div>
+          <button class="chip-action chip-close quick-link-remove" data-action="remove-quick-link" data-quick-link-id="${escapeHtml(link.id)}" title="移除快捷入口">
+            ${ICONS.close}
+          </button>
+        </div>`;
+    }).join('');
+  } catch (err) {
+    console.warn('[tab-out] Could not load quick links:', err);
+    section.style.display = 'none';
+  }
+}
+
+
+/* ----------------------------------------------------------------
    MAIN DASHBOARD RENDERER
    ---------------------------------------------------------------- */
 
@@ -1032,6 +1164,9 @@ async function renderStaticDashboard() {
   const dateEl     = document.getElementById('dateDisplay');
   if (greetingEl) greetingEl.textContent = getGreeting();
   if (dateEl)     dateEl.textContent     = getDateDisplay();
+
+  // --- Render custom quick navigation links ---
+  await renderQuickLinks();
 
   // --- Fetch tabs ---
   await fetchOpenTabs();
@@ -1257,6 +1392,25 @@ document.addEventListener('click', async (e) => {
   if (!actionEl) return;
 
   const action = actionEl.dataset.action;
+
+  // ---- Open a quick navigation link ----
+  if (action === 'open-quick-link') {
+    const url = actionEl.dataset.quickLinkUrl;
+    if (url) await openQuickLink(url);
+    return;
+  }
+
+  // ---- Remove a quick navigation link ----
+  if (action === 'remove-quick-link') {
+    e.stopPropagation();
+    const id = actionEl.dataset.quickLinkId;
+    if (!id) return;
+
+    await removeQuickLink(id);
+    await renderQuickLinks();
+    showToast('已移除快捷入口');
+    return;
+  }
 
   // ---- Close duplicate Tab Out tabs ----
   if (action === 'close-tabout-dupes') {
@@ -1512,6 +1666,30 @@ document.addEventListener('click', (e) => {
   const body = document.getElementById('archiveBody');
   if (body) {
     body.style.display = body.style.display === 'none' ? 'block' : 'none';
+  }
+});
+
+// ---- Quick link form — add a custom navigation shortcut ----
+document.addEventListener('submit', async (e) => {
+  if (e.target.id !== 'quickLinkForm') return;
+  e.preventDefault();
+
+  const titleInput = document.getElementById('quickLinkTitle');
+  const urlInput   = document.getElementById('quickLinkUrl');
+  if (!titleInput || !urlInput) return;
+
+  try {
+    await addQuickLink({
+      title: titleInput.value,
+      url:   urlInput.value,
+    });
+
+    titleInput.value = '';
+    urlInput.value = '';
+    await renderQuickLinks();
+    showToast('已添加到常用导航');
+  } catch (err) {
+    showToast(err.message || '添加失败');
   }
 });
 

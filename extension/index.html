@@ -47,6 +47,25 @@
   </div>
 
   <!-- ================================================================
+       QUICK LINKS — user-defined navigation shortcuts
+       ================================================================ -->
+  <section class="quick-links-section" id="quickLinksSection">
+    <div class="section-header">
+      <h2>常用导航</h2>
+      <div class="section-line"></div>
+      <div class="section-count" id="quickLinksCount"></div>
+    </div>
+
+    <form class="quick-link-form" id="quickLinkForm">
+      <input type="text" id="quickLinkTitle" placeholder="名称，例如 飞书文档" autocomplete="off">
+      <input type="text" id="quickLinkUrl" placeholder="网址，例如 docs.example.com" autocomplete="off">
+      <button type="submit" class="action-btn primary">添加</button>
+    </form>
+
+    <div class="quick-links-grid" id="quickLinksGrid"></div>
+  </section>
+
+  <!-- ================================================================
        MAIN CONTENT AREA — two-column layout
        Left: open tabs (domain/mission cards)
        Right: saved for later checklist

@@ -564,6 +564,107 @@ header {
   color: var(--status-abandoned);
 }
 
+/* ---- Quick Links ---- */
+.quick-links-section {
+  margin-bottom: 36px;
+}
+
+.quick-link-form {
+  display: grid;
+  grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) auto;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.quick-link-form input {
+  font-family: 'DM Sans', sans-serif;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--card-bg);
+  border: 1px solid var(--warm-gray);
+  border-radius: 6px;
+  padding: 8px 10px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.quick-link-form input:focus {
+  border-color: rgba(90, 122, 98, 0.45);
+  box-shadow: 0 0 0 3px rgba(90, 122, 98, 0.08);
+}
+
+.quick-links-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.quick-link-card {
+  background: var(--card-bg);
+  border: 1px solid var(--warm-gray);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s;
+  min-width: 0;
+}
+
+.quick-link-card:hover {
+  box-shadow: 0 4px 20px var(--shadow);
+  transform: translateY(-1px);
+  border-color: rgba(90, 122, 98, 0.3);
+}
+
+.quick-link-favicon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.quick-link-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.quick-link-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.quick-link-domain {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.quick-link-remove {
+  opacity: 0.35;
+}
+
+.quick-link-card:hover .quick-link-remove {
+  opacity: 0.7;
+}
+
+.quick-link-empty {
+  border: 1px dashed var(--warm-gray);
+  border-radius: 8px;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  background: rgba(255, 253, 249, 0.55);
+}
+
 /* ---- Toast notification ---- */
 .toast {
   position: fixed;
@@ -660,6 +761,7 @@ footer {
 header { animation: fadeUp 0.5s ease both; }
 .tab-cleanup-banner { animation: fadeUp 0.5s ease 0.1s both; }
 .nudge-banner { animation: fadeUp 0.5s ease 0.15s both; }
+.quick-links-section { animation: fadeUp 0.5s ease 0.16s both; }
 .active-section .section-header { animation: fadeUp 0.5s ease 0.2s both; }
 .active-section .missions .mission-card:nth-child(1) { animation: fadeUp 0.4s ease 0.25s both; }
 .active-section .missions .mission-card:nth-child(2) { animation: fadeUp 0.4s ease 0.3s both; }
@@ -919,6 +1021,9 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
   .deferred-column {
     width: 100%;
     position: static;
+  }
+  .quick-link-form {
+    grid-template-columns: 1fr;
   }
 }
 
