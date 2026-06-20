@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Tab Out",
   "version": "1.0.0",
-  "description": "Keep tabs on your tabs. New tab page that groups your open tabs by domain and lets you close them with style.",
+  "description": "把新标签页变成标签页整理面板，按域名分组展示、跳转和关闭当前打开的网页。",
   "permissions": ["tabs", "activeTab", "storage"],
   "chrome_url_overrides": { "newtab": "index.html" },
   "background": { "service_worker": "background.js" },
