@@ -57,9 +57,11 @@
     </div>
 
     <form class="quick-link-form" id="quickLinkForm">
+      <input type="hidden" id="quickLinkEditingId">
       <input type="text" id="quickLinkTitle" placeholder="名称，例如 飞书文档" autocomplete="off">
       <input type="text" id="quickLinkUrl" placeholder="网址，例如 docs.example.com" autocomplete="off">
-      <button type="submit" class="action-btn primary">添加</button>
+      <button type="submit" class="action-btn primary" id="quickLinkSubmit">添加</button>
+      <button type="button" class="action-btn" id="quickLinkCancel" data-action="cancel-quick-link-edit" style="display:none">取消</button>
     </form>
 
     <div class="quick-links-grid" id="quickLinksGrid"></div>

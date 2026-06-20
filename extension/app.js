@@ -354,11 +354,35 @@ async function addQuickLink({ title, url }) {
   await chrome.storage.local.set({ quickLinks });
 }
 
+async function updateQuickLink(id, { title, url }) {
+  const cleanTitle = String(title || '').trim();
+  if (!cleanTitle) throw new Error('请输入名称');
+
+  const normalizedUrl = normalizeQuickLinkUrl(url);
+  const quickLinks = await getQuickLinks();
+  const target = quickLinks.find(link => link.id === id);
+  if (!target) throw new Error('快捷入口不存在');
+
+  const alreadyExists = quickLinks.some(link => link.id !== id && link.url === normalizedUrl);
+  if (alreadyExists) throw new Error('这个网址已经在常用导航里了');
+
+  target.title = cleanTitle;
+  target.url = normalizedUrl;
+  target.updatedAt = new Date().toISOString();
+
+  await chrome.storage.local.set({ quickLinks });
+}
+
 async function removeQuickLink(id) {
   const quickLinks = await getQuickLinks();
   await chrome.storage.local.set({
     quickLinks: quickLinks.filter(link => link.id !== id),
   });
+}
+
+async function getQuickLink(id) {
+  const quickLinks = await getQuickLinks();
+  return quickLinks.find(link => link.id === id) || null;
 }
 
 async function openQuickLink(url) {
@@ -789,6 +813,7 @@ const ICONS = {
   close:   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>`,
   archive: `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M20.25 7.5l-.625 10.632a2.25 2.25 0 0 1-2.247 2.118H6.622a2.25 2.25 0 0 1-2.247-2.118L3.75 7.5m6 4.125l2.25 2.25m0 0l2.25 2.25M12 13.875l2.25-2.25M12 13.875l-2.25 2.25M3.375 7.5h17.25c.621 0 1.125-.504 1.125-1.125v-1.5c0-.621-.504-1.125-1.125-1.125H3.375c-.621 0-1.125.504-1.125 1.125v1.5c0 .621.504 1.125 1.125 1.125Z" /></svg>`,
   focus:   `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m4.5 19.5 15-15m0 0H8.25m11.25 0v11.25" /></svg>`,
+  edit:    `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125" /></svg>`,
 };
 
 
@@ -874,7 +899,7 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
   return `
     <div class="page-chips-overflow" style="display:none">${hiddenChips}</div>
     <div class="page-chip page-chip-overflow clickable" data-action="expand-chips">
-      <span class="chip-text">还有 ${hiddenTabs.length} 个</span>
+      <span class="chip-text">展开剩余 ${hiddenTabs.length} 个标签页</span>
     </div>`;
 }
 
@@ -952,11 +977,7 @@ function renderDomainCard(group) {
     </div>`;
   }).join('') + (extraCount > 0 ? buildOverflowChips(uniqueTabs.slice(8), urlCounts) : '');
 
-  let actionsHtml = `
-    <button class="action-btn close-tabs" data-action="close-domain-tabs" data-domain-id="${stableId}">
-      ${ICONS.close}
-      关闭全部 ${tabCount} 个标签页
-    </button>`;
+  let actionsHtml = '';
 
   if (hasDupes) {
     const dupeUrlsEncoded = dupeUrls.map(([url]) => encodeURIComponent(url)).join(',');
@@ -965,6 +986,15 @@ function renderDomainCard(group) {
         关闭 ${totalExtras} 个重复标签页
       </button>`;
   }
+
+  const dangerHtml = `
+    <div class="domain-danger-zone">
+      <span class="domain-danger-hint">危险操作</span>
+      <button class="action-btn close-tabs domain-close-all" data-action="close-domain-tabs" data-domain-id="${stableId}">
+        ${ICONS.close}
+        关闭该分组全部 ${tabCount} 个标签页
+      </button>
+    </div>`;
 
   return `
     <div class="mission-card domain-card ${hasDupes ? 'has-amber-bar' : 'has-neutral-bar'}" data-domain-id="${stableId}">
@@ -976,7 +1006,8 @@ function renderDomainCard(group) {
           ${dupeBadge}
         </div>
         <div class="mission-pages">${pageChips}</div>
-        <div class="actions">${actionsHtml}</div>
+        ${actionsHtml ? `<div class="actions">${actionsHtml}</div>` : ''}
+        ${dangerHtml}
       </div>
       <div class="mission-meta">
         <div class="mission-page-count">${tabCount}</div>
@@ -1131,6 +1162,9 @@ async function renderQuickLinks() {
             <div class="quick-link-title">${safeTitle}</div>
             <div class="quick-link-domain">${safeDomain}</div>
           </div>
+          <button class="chip-action quick-link-edit" data-action="edit-quick-link" data-quick-link-id="${escapeHtml(link.id)}" title="编辑快捷入口">
+            ${ICONS.edit}
+          </button>
           <button class="chip-action chip-close quick-link-remove" data-action="remove-quick-link" data-quick-link-id="${escapeHtml(link.id)}" title="移除快捷入口">
             ${ICONS.close}
           </button>
@@ -1140,6 +1174,41 @@ async function renderQuickLinks() {
     console.warn('[tab-out] Could not load quick links:', err);
     section.style.display = 'none';
   }
+}
+
+function resetQuickLinkForm() {
+  const editingInput = document.getElementById('quickLinkEditingId');
+  const titleInput   = document.getElementById('quickLinkTitle');
+  const urlInput     = document.getElementById('quickLinkUrl');
+  const submitBtn    = document.getElementById('quickLinkSubmit');
+  const cancelBtn    = document.getElementById('quickLinkCancel');
+
+  if (editingInput) editingInput.value = '';
+  if (titleInput) titleInput.value = '';
+  if (urlInput) urlInput.value = '';
+  if (submitBtn) submitBtn.textContent = '添加';
+  if (cancelBtn) cancelBtn.style.display = 'none';
+}
+
+async function startEditingQuickLink(id) {
+  const link = await getQuickLink(id);
+  if (!link) {
+    showToast('快捷入口不存在');
+    return;
+  }
+
+  const editingInput = document.getElementById('quickLinkEditingId');
+  const titleInput   = document.getElementById('quickLinkTitle');
+  const urlInput     = document.getElementById('quickLinkUrl');
+  const submitBtn    = document.getElementById('quickLinkSubmit');
+  const cancelBtn    = document.getElementById('quickLinkCancel');
+
+  if (editingInput) editingInput.value = link.id;
+  if (titleInput) titleInput.value = link.title;
+  if (urlInput) urlInput.value = link.url;
+  if (submitBtn) submitBtn.textContent = '保存';
+  if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+  if (titleInput) titleInput.focus();
 }
 
 
@@ -1400,6 +1469,21 @@ document.addEventListener('click', async (e) => {
     return;
   }
 
+  // ---- Edit a quick navigation link ----
+  if (action === 'edit-quick-link') {
+    e.stopPropagation();
+    const id = actionEl.dataset.quickLinkId;
+    if (id) await startEditingQuickLink(id);
+    return;
+  }
+
+  // ---- Cancel quick link editing ----
+  if (action === 'cancel-quick-link-edit') {
+    e.stopPropagation();
+    resetQuickLinkForm();
+    return;
+  }
+
   // ---- Remove a quick navigation link ----
   if (action === 'remove-quick-link') {
     e.stopPropagation();
@@ -1576,6 +1660,12 @@ document.addEventListener('click', async (e) => {
     // Landing pages and custom groups (whose domain key isn't a real hostname)
     // must use exact URL matching to avoid closing unrelated tabs
     const useExact  = group.domain === '__landing-pages__' || !!group.label;
+    const groupLabel = group.domain === '__landing-pages__' ? '常用首页' : (group.label || friendlyDomain(group.domain));
+
+    if (urls.length > 1) {
+      const confirmed = window.confirm(`确认关闭「${groupLabel}」中的全部 ${urls.length} 个标签页吗？`);
+      if (!confirmed) return;
+    }
 
     if (useExact) {
       await closeTabsExact(urls);
@@ -1592,7 +1682,6 @@ document.addEventListener('click', async (e) => {
     const idx = domainGroups.indexOf(group);
     if (idx !== -1) domainGroups.splice(idx, 1);
 
-    const groupLabel = group.domain === '__landing-pages__' ? '常用首页' : (group.label || friendlyDomain(group.domain));
     showToast(`已关闭「${groupLabel}」中的 ${urls.length} 个标签页`);
 
     const statTabs = document.getElementById('statTabs');
@@ -1669,27 +1758,34 @@ document.addEventListener('click', (e) => {
   }
 });
 
-// ---- Quick link form — add a custom navigation shortcut ----
+// ---- Quick link form — add or edit a custom navigation shortcut ----
 document.addEventListener('submit', async (e) => {
   if (e.target.id !== 'quickLinkForm') return;
   e.preventDefault();
 
+  const editingInput = document.getElementById('quickLinkEditingId');
   const titleInput = document.getElementById('quickLinkTitle');
   const urlInput   = document.getElementById('quickLinkUrl');
   if (!titleInput || !urlInput) return;
 
   try {
-    await addQuickLink({
+    const editingId = editingInput ? editingInput.value : '';
+    const payload = {
       title: titleInput.value,
       url:   urlInput.value,
-    });
+    };
 
-    titleInput.value = '';
-    urlInput.value = '';
+    if (editingId) {
+      await updateQuickLink(editingId, payload);
+    } else {
+      await addQuickLink(payload);
+    }
+
+    resetQuickLinkForm();
     await renderQuickLinks();
-    showToast('已添加到常用导航');
+    showToast(editingId ? '快捷入口已更新' : '已添加到常用导航');
   } catch (err) {
-    showToast(err.message || '添加失败');
+    showToast(err.message || '保存失败');
   }
 });
 
