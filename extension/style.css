@@ -704,7 +704,7 @@ header {
 
 .quick-link-form {
   display: grid;
-  grid-template-columns: minmax(140px, 1fr) minmax(220px, 2fr) auto auto;
+  grid-template-columns: minmax(220px, 2fr) minmax(140px, 1fr) auto auto;
   gap: 10px;
   margin-bottom: 14px;
 }

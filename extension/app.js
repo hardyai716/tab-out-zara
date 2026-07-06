@@ -38,6 +38,7 @@ let isDeferredItemSorting = false;
 let deferredItemDragState = null;
 let quickLinkDragState = null;
 let suppressNextQuickLinkOpen = false;
+let quickLinkTitleManuallyEdited = false;
 let selectedBookmarkFolderId = null;
 let selectedBookmarkFolderTitle = '书签栏';
 let bookmarksExpanded = false;
@@ -369,16 +370,77 @@ function normalizeQuickLinkUrl(rawUrl) {
   return parsed.href;
 }
 
+function titleFromQuickLinkUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const domain = parsed.hostname.replace(/^www\./, '');
+    const friendly = friendlyDomain(domain);
+    if (friendly && friendly !== domain) return friendly;
+
+    const mainPart = domain.split('.')[0] || domain;
+    return mainPart
+      .split(/[-_]/)
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ') || domain;
+  } catch {
+    return '';
+  }
+}
+
+async function inferQuickLinkTitle(rawUrl) {
+  const normalizedUrl = normalizeQuickLinkUrl(rawUrl);
+  const normalizedWithoutHash = normalizedUrl.split('#')[0];
+
+  const matchingTab = openTabs.find(tab => {
+    const tabUrl = tab.url || '';
+    return tabUrl === normalizedUrl || tabUrl.split('#')[0] === normalizedWithoutHash;
+  });
+
+  if (matchingTab && matchingTab.title) {
+    return cleanTitle(smartTitle(stripTitleNoise(matchingTab.title), normalizedUrl), '');
+  }
+
+  if (hasBookmarksApi() && chrome.bookmarks.search) {
+    try {
+      const matches = await chrome.bookmarks.search({ url: normalizedUrl });
+      const bookmark = Array.isArray(matches) ? matches.find(node => node.url === normalizedUrl && node.title) : null;
+      if (bookmark) return bookmark.title;
+    } catch {}
+  }
+
+  return titleFromQuickLinkUrl(normalizedUrl);
+}
+
+async function maybeAutofillQuickLinkTitle({ force = false } = {}) {
+  const editingInput = document.getElementById('quickLinkEditingId');
+  const titleInput = document.getElementById('quickLinkTitle');
+  const urlInput = document.getElementById('quickLinkUrl');
+  if (!titleInput || !urlInput) return;
+  if (editingInput && editingInput.value && !force) return;
+  if (quickLinkTitleManuallyEdited && !force) return;
+
+  const rawUrl = urlInput.value.trim();
+  if (!rawUrl) return;
+
+  try {
+    const inferredTitle = await inferQuickLinkTitle(rawUrl);
+    if (inferredTitle) titleInput.value = inferredTitle;
+  } catch {
+    // Keep the form quiet while the user is still typing an incomplete URL.
+  }
+}
+
 async function getQuickLinks() {
   const { quickLinks = [] } = await chrome.storage.local.get('quickLinks');
   return Array.isArray(quickLinks) ? quickLinks : [];
 }
 
 async function addQuickLink({ title, url }) {
-  const cleanTitle = String(title || '').trim();
+  const normalizedUrl = normalizeQuickLinkUrl(url);
+  const cleanTitle = String(title || '').trim() || await inferQuickLinkTitle(normalizedUrl);
   if (!cleanTitle) throw new Error('请输入名称');
 
-  const normalizedUrl = normalizeQuickLinkUrl(url);
   const quickLinks = await getQuickLinks();
   const alreadyExists = quickLinks.some(link => link.url === normalizedUrl);
   if (alreadyExists) throw new Error('这个网址已经在常用导航里了');
@@ -394,10 +456,10 @@ async function addQuickLink({ title, url }) {
 }
 
 async function updateQuickLink(id, { title, url }) {
-  const cleanTitle = String(title || '').trim();
+  const normalizedUrl = normalizeQuickLinkUrl(url);
+  const cleanTitle = String(title || '').trim() || await inferQuickLinkTitle(normalizedUrl);
   if (!cleanTitle) throw new Error('请输入名称');
 
-  const normalizedUrl = normalizeQuickLinkUrl(url);
   const quickLinks = await getQuickLinks();
   const target = quickLinks.find(link => link.id === id);
   if (!target) throw new Error('快捷入口不存在');
@@ -1516,6 +1578,7 @@ function resetQuickLinkForm() {
   const submitBtn    = document.getElementById('quickLinkSubmit');
   const cancelBtn    = document.getElementById('quickLinkCancel');
 
+  quickLinkTitleManuallyEdited = false;
   if (editingInput) editingInput.value = '';
   if (titleInput) titleInput.value = '';
   if (urlInput) urlInput.value = '';
@@ -1541,6 +1604,7 @@ async function startEditingQuickLink(id) {
   if (urlInput) urlInput.value = link.url;
   if (submitBtn) submitBtn.textContent = '保存';
   if (cancelBtn) cancelBtn.style.display = 'inline-flex';
+  quickLinkTitleManuallyEdited = true;
   if (titleInput) titleInput.focus();
 }
 
@@ -2410,6 +2474,33 @@ document.addEventListener('submit', async (e) => {
     showToast(err.message || '保存失败');
   }
 });
+
+let quickLinkAutofillTimer = null;
+
+// ---- Quick link URL input — infer title while the user adds a shortcut ----
+document.addEventListener('input', (e) => {
+  if (e.target.id === 'quickLinkTitle') {
+    quickLinkTitleManuallyEdited = true;
+    return;
+  }
+
+  if (e.target.id !== 'quickLinkUrl') return;
+
+  if (quickLinkAutofillTimer !== null) clearTimeout(quickLinkAutofillTimer);
+  quickLinkAutofillTimer = setTimeout(() => {
+    quickLinkAutofillTimer = null;
+    maybeAutofillQuickLinkTitle().catch(err => {
+      console.warn('[tab-out] Could not infer quick link title:', err);
+    });
+  }, 250);
+});
+
+document.addEventListener('blur', (e) => {
+  if (e.target.id !== 'quickLinkUrl') return;
+  maybeAutofillQuickLinkTitle().catch(err => {
+    console.warn('[tab-out] Could not infer quick link title:', err);
+  });
+}, true);
 
 // ---- Archive search — filter archived items as user types ----
 document.addEventListener('input', async (e) => {
