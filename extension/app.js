@@ -982,40 +982,6 @@ function checkTabOutDupes() {
 
 
 /* ----------------------------------------------------------------
-   OVERFLOW CHIPS ("+N more" expand button in domain cards)
-   ---------------------------------------------------------------- */
-
-function buildOverflowChips(hiddenTabs, urlCounts = {}) {
-  const hiddenChips = hiddenTabs.map(tab => {
-    const label    = cleanTitle(smartTitle(stripTitleNoise(tab.title || ''), tab.url), '');
-    const count    = urlCounts[tab.url] || 1;
-    const dupeTag  = count > 1 ? ` <span class="chip-dupe-badge">(${count}x)</span>` : '';
-    const chipClass = count > 1 ? ' chip-has-dupes' : '';
-    const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
-    const safeTitle = label.replace(/"/g, '&quot;');
-    return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
-      ${renderFavicon(tab.url, 'chip-favicon', 16)}
-      <span class="chip-text">${label}</span>${dupeTag}
-      <div class="chip-actions">
-        <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="稍后处理">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
-        </button>
-        <button class="chip-action chip-close" data-action="close-single-tab" data-tab-url="${safeUrl}" title="关闭这个标签页">
-          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
-        </button>
-      </div>
-    </div>`;
-  }).join('');
-
-  return `
-    <div class="page-chips-overflow" style="display:none">${hiddenChips}</div>
-    <div class="page-chip page-chip-overflow clickable" data-action="expand-chips">
-      <span class="chip-text">展开剩余 ${hiddenTabs.length} 个标签页</span>
-    </div>`;
-}
-
-
-/* ----------------------------------------------------------------
    DOMAIN CARD RENDERER
    ---------------------------------------------------------------- */
 
@@ -1056,10 +1022,9 @@ function renderDomainCard(group) {
     if (!seen.has(tab.url)) { seen.add(tab.url); uniqueTabs.push(tab); }
   }
 
-  const visibleTabs = uniqueTabs.slice(0, 8);
-  const extraCount  = uniqueTabs.length - visibleTabs.length;
+  const shouldScrollTabs = uniqueTabs.length > 8;
 
-  const pageChips = visibleTabs.map(tab => {
+  const pageChips = uniqueTabs.map(tab => {
     let label = cleanTitle(smartTitle(stripTitleNoise(tab.title || ''), tab.url), group.domain);
     // For localhost tabs, prepend port number so you can tell projects apart
     try {
@@ -1083,7 +1048,12 @@ function renderDomainCard(group) {
         </button>
       </div>
     </div>`;
-  }).join('') + (extraCount > 0 ? buildOverflowChips(uniqueTabs.slice(8), urlCounts) : '');
+  }).join('');
+
+  const pagesClass = shouldScrollTabs ? 'mission-pages is-scrollable' : 'mission-pages';
+  const pagesHint = shouldScrollTabs
+    ? `<div class="mission-pages-hint">共 ${uniqueTabs.length} 个页面，可在卡片内上下滑动</div>`
+    : '';
 
   let actionsHtml = '';
 
@@ -1113,7 +1083,8 @@ function renderDomainCard(group) {
           ${tabBadge}
           ${dupeBadge}
         </div>
-        <div class="mission-pages">${pageChips}</div>
+        ${pagesHint}
+        <div class="${pagesClass}">${pageChips}</div>
         ${actionsHtml ? `<div class="actions">${actionsHtml}</div>` : ''}
         ${dangerHtml}
       </div>
@@ -2019,16 +1990,6 @@ document.addEventListener('click', async (e) => {
   }
 
   const card = actionEl.closest('.mission-card');
-
-  // ---- Expand overflow chips ("+N more") ----
-  if (action === 'expand-chips') {
-    const overflowContainer = actionEl.parentElement.querySelector('.page-chips-overflow');
-    if (overflowContainer) {
-      overflowContainer.style.display = 'contents';
-      actionEl.remove();
-    }
-    return;
-  }
 
   // ---- Focus a specific tab ----
   if (action === 'focus-tab') {
