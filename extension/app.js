@@ -313,6 +313,33 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
+function getFaviconUrl(pageUrl, size = 16) {
+  if (
+    !pageUrl ||
+    typeof chrome === 'undefined' ||
+    !chrome.runtime ||
+    !chrome.runtime.id
+  ) {
+    return '';
+  }
+
+  try {
+    const parsed = new URL(pageUrl);
+    if (!['http:', 'https:'].includes(parsed.protocol)) return '';
+
+    return `chrome-extension://${chrome.runtime.id}/_favicon/?pageUrl=${encodeURIComponent(parsed.href)}&size=${size}`;
+  } catch {
+    return '';
+  }
+}
+
+function renderFavicon(pageUrl, className, size = 16, extraAttrs = '') {
+  const faviconUrl = getFaviconUrl(pageUrl, size);
+  if (!faviconUrl) return '';
+
+  return `<img class="${className}" src="${escapeHtml(faviconUrl)}" alt="" ${extraAttrs} onerror="this.style.display='none'">`;
+}
+
 function normalizeQuickLinkUrl(rawUrl) {
   const trimmed = String(rawUrl || '').trim();
   if (!trimmed) throw new Error('请输入网址');
@@ -884,11 +911,8 @@ function buildOverflowChips(hiddenTabs, urlCounts = {}) {
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
     const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
     const safeTitle = label.replace(/"/g, '&quot;');
-    let domain = '';
-    try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
-      ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+      ${renderFavicon(tab.url, 'chip-favicon', 16)}
       <span class="chip-text">${label}</span>${dupeTag}
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="稍后处理">
@@ -965,11 +989,8 @@ function renderDomainCard(group) {
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
     const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
     const safeTitle = label.replace(/"/g, '&quot;');
-    let domain = '';
-    try { domain = new URL(tab.url).hostname; } catch {}
-    const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${domain}&sz=16` : '';
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
-      ${faviconUrl ? `<img class="chip-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+      ${renderFavicon(tab.url, 'chip-favicon', 16)}
       <span class="chip-text">${label}</span>${dupeTag}
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="稍后处理">
@@ -1233,7 +1254,6 @@ async function renderDeferredColumn() {
 function renderDeferredItem(item) {
   let domain = '';
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
-  const faviconUrl = `https://www.google.com/s2/favicons?domain=${domain}&sz=16`;
   const ago = timeAgo(item.savedAt);
   const sortClass = isDeferredItemSorting ? ' sorting' : '';
   const handle = isDeferredItemSorting
@@ -1246,7 +1266,7 @@ function renderDeferredItem(item) {
       <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}" ${isDeferredItemSorting ? 'disabled' : ''}>
       <div class="deferred-info">
         <a href="${item.url}" target="_blank" rel="noopener" class="deferred-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
-          <img src="${faviconUrl}" alt="" style="width:14px;height:14px;vertical-align:-2px;margin-right:4px" onerror="this.style.display='none'">${item.title || item.url}
+          ${renderFavicon(item.url, 'deferred-favicon', 16)}${item.title || item.url}
         </a>
         <div class="deferred-meta">
           <span>${domain}</span>
@@ -1305,11 +1325,10 @@ async function renderQuickLinks() {
       let domain = '';
       try { domain = new URL(link.url).hostname.replace(/^www\./, ''); } catch {}
       const safeDomain = escapeHtml(domain);
-      const faviconUrl = domain ? `https://www.google.com/s2/favicons?domain=${encodeURIComponent(domain)}&sz=32` : '';
 
       return `
         <div class="quick-link-card" data-action="open-quick-link" data-quick-link-url="${safeUrl}" title="${safeUrl}">
-          ${faviconUrl ? `<img class="quick-link-favicon" src="${faviconUrl}" alt="" onerror="this.style.display='none'">` : ''}
+          ${renderFavicon(link.url, 'quick-link-favicon', 32)}
           <div class="quick-link-info">
             <div class="quick-link-title">${safeTitle}</div>
             <div class="quick-link-domain">${safeDomain}</div>
