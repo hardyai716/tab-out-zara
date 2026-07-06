@@ -34,6 +34,8 @@ let dashboardRenderQueued = false;
 let selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
 let isDeferredItemSorting = false;
 let deferredItemDragState = null;
+let quickLinkDragState = null;
+let suppressNextQuickLinkOpen = false;
 
 /**
  * fetchOpenTabs()
@@ -409,6 +411,19 @@ async function removeQuickLink(id) {
   const quickLinks = await getQuickLinks();
   await chrome.storage.local.set({
     quickLinks: quickLinks.filter(link => link.id !== id),
+  });
+}
+
+async function saveQuickLinkOrderFromDom() {
+  const cards = [...document.querySelectorAll('.quick-link-card')];
+  const orderedIds = cards.map(card => card.dataset.quickLinkId).filter(Boolean);
+  const quickLinks = await getQuickLinks();
+  const linksById = new Map(quickLinks.map(link => [link.id, link]));
+  const orderedLinks = orderedIds.map(id => linksById.get(id)).filter(Boolean);
+  const missingLinks = quickLinks.filter(link => !orderedIds.includes(link.id));
+
+  await chrome.storage.local.set({
+    quickLinks: [...orderedLinks, ...missingLinks],
   });
 }
 
@@ -1325,18 +1340,20 @@ async function renderQuickLinks() {
       let domain = '';
       try { domain = new URL(link.url).hostname.replace(/^www\./, ''); } catch {}
       const safeDomain = escapeHtml(domain);
+      const safeId = escapeHtml(link.id);
 
       return `
-        <div class="quick-link-card" data-action="open-quick-link" data-quick-link-url="${safeUrl}" title="${safeUrl}">
+        <div class="quick-link-card" data-action="open-quick-link" data-quick-link-id="${safeId}" data-quick-link-url="${safeUrl}" title="${safeUrl}">
+          <button class="quick-link-drag" data-action="drag-quick-link" type="button" title="拖拽调整顺序" aria-label="拖拽调整顺序">☰</button>
           ${renderFavicon(link.url, 'quick-link-favicon', 32)}
           <div class="quick-link-info">
             <div class="quick-link-title">${safeTitle}</div>
             <div class="quick-link-domain">${safeDomain}</div>
           </div>
-          <button class="chip-action quick-link-edit" data-action="edit-quick-link" data-quick-link-id="${escapeHtml(link.id)}" title="编辑快捷入口">
+          <button class="chip-action quick-link-edit" data-action="edit-quick-link" data-quick-link-id="${safeId}" title="编辑快捷入口">
             ${ICONS.edit}
           </button>
-          <button class="chip-action chip-close quick-link-remove" data-action="remove-quick-link" data-quick-link-id="${escapeHtml(link.id)}" title="移除快捷入口">
+          <button class="chip-action chip-close quick-link-remove" data-action="remove-quick-link" data-quick-link-id="${safeId}" title="移除快捷入口">
             ${ICONS.close}
           </button>
         </div>`;
@@ -1633,8 +1650,20 @@ document.addEventListener('click', async (e) => {
 
   const action = actionEl.dataset.action;
 
+  // ---- Drag handle for quick navigation ordering ----
+  if (action === 'drag-quick-link') {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
   // ---- Open a quick navigation link ----
   if (action === 'open-quick-link') {
+    if (suppressNextQuickLinkOpen) {
+      suppressNextQuickLinkOpen = false;
+      return;
+    }
+
     const url = actionEl.dataset.quickLinkUrl;
     if (url) await openQuickLink(url);
     return;
@@ -1961,6 +1990,76 @@ document.addEventListener('click', (e) => {
   if (body) {
     body.style.display = body.style.display === 'none' ? 'block' : 'none';
   }
+});
+
+function getQuickLinkDropTarget(container, x, y) {
+  const cards = [...container.querySelectorAll('.quick-link-card:not(.dragging)')];
+  return cards.find(card => {
+    const rect = card.getBoundingClientRect();
+    const isAbove = y < rect.top + rect.height / 2;
+    const isSameRowBefore = y >= rect.top && y <= rect.bottom && x < rect.left + rect.width / 2;
+    return isAbove || isSameRowBefore;
+  }) || null;
+}
+
+// ---- Quick link drag sorting — Pointer Events support mouse + touch ----
+document.addEventListener('pointerdown', (e) => {
+  const handle = e.target.closest('.quick-link-drag');
+  if (!handle) return;
+
+  const card = handle.closest('.quick-link-card');
+  const container = document.getElementById('quickLinksGrid');
+  if (!card || !container) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  card.setPointerCapture(e.pointerId);
+  card.classList.add('dragging');
+  document.body.classList.add('quick-link-dragging');
+  quickLinkDragState = { card, container, pointerId: e.pointerId, moved: false };
+});
+
+document.addEventListener('pointermove', (e) => {
+  if (!quickLinkDragState) return;
+
+  const { card, container } = quickLinkDragState;
+  quickLinkDragState.moved = true;
+  const dropTarget = getQuickLinkDropTarget(container, e.clientX, e.clientY);
+  if (dropTarget && dropTarget !== card) {
+    container.insertBefore(card, dropTarget);
+  } else if (!dropTarget) {
+    container.appendChild(card);
+  }
+});
+
+async function finishQuickLinkDrag() {
+  if (!quickLinkDragState) return;
+
+  const { card, moved } = quickLinkDragState;
+  card.classList.remove('dragging');
+  document.body.classList.remove('quick-link-dragging');
+  quickLinkDragState = null;
+
+  if (moved) {
+    suppressNextQuickLinkOpen = true;
+    await saveQuickLinkOrderFromDom();
+    showToast('常用导航顺序已保存');
+    setTimeout(() => {
+      suppressNextQuickLinkOpen = false;
+    }, 250);
+  }
+}
+
+document.addEventListener('pointerup', () => {
+  finishQuickLinkDrag().catch(err => {
+    console.warn('[tab-out] Could not save quick link order:', err);
+  });
+});
+
+document.addEventListener('pointercancel', () => {
+  finishQuickLinkDrag().catch(err => {
+    console.warn('[tab-out] Could not save quick link order:', err);
+  });
 });
 
 function getDeferredItemDropTarget(container, y) {

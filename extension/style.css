@@ -657,6 +657,42 @@ header {
   border-color: rgba(90, 122, 98, 0.3);
 }
 
+.quick-link-card.dragging {
+  opacity: 0.72;
+  transform: scale(1.02);
+  box-shadow: 0 8px 28px var(--shadow);
+  border-color: rgba(90, 122, 98, 0.45);
+  cursor: grabbing;
+}
+
+.quick-link-drag {
+  width: 22px;
+  height: 22px;
+  border: 1px solid rgba(90, 122, 98, 0.18);
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.06);
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+  opacity: 0.45;
+  transition: opacity 0.16s, background 0.16s, border-color 0.16s;
+}
+
+.quick-link-drag:hover,
+.quick-link-card:hover .quick-link-drag {
+  opacity: 0.9;
+  background: rgba(90, 122, 98, 0.1);
+  border-color: rgba(90, 122, 98, 0.32);
+}
+
+.quick-link-dragging {
+  cursor: grabbing;
+}
+
 .quick-link-favicon {
   width: 18px;
   height: 18px;
