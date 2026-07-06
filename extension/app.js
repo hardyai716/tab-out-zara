@@ -27,6 +27,7 @@
 let openTabs = [];
 
 const REALTIME_REFRESH_DEBOUNCE_MS = 250;
+const ACCESS_STATUS_REFRESH_MS = 60000;
 const DEFERRED_ALL_GROUP_ID = '__all__';
 const BOOKMARKS_PREVIEW_LIMIT = 10;
 let realtimeRefreshTimer = null;
@@ -62,6 +63,7 @@ async function fetchOpenTabs() {
       title:    t.title,
       windowId: t.windowId,
       active:   t.active,
+      lastAccessed: t.lastAccessed,
       // Flag Tab Out's own pages so we can detect duplicate new tabs
       isTabOut: t.url === newtabUrl || t.url === 'chrome://newtab/',
     }));
@@ -716,6 +718,57 @@ function timeAgo(dateStr) {
   return diffDays + ' 天前';
 }
 
+function getTabAccessState(lastAccessed) {
+  if (!Number.isFinite(lastAccessed)) return null;
+
+  const diffMs = Math.max(0, Date.now() - lastAccessed);
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  let timeText = '刚刚看过';
+  if (diffMins >= 1 && diffMins < 60) {
+    timeText = `${diffMins} 分钟前看过`;
+  } else if (diffHours >= 1 && diffHours < 24) {
+    timeText = `${diffHours} 小时前看过`;
+  } else if (diffDays >= 1) {
+    timeText = `${diffDays} 天前看过`;
+  }
+
+  if (diffMins < 15) {
+    return { timeText, label: '刚看过', level: 'fresh', prominent: false };
+  }
+
+  if (diffMins < 120) {
+    return { timeText, label: '最近看过', level: 'recent', prominent: false };
+  }
+
+  if (diffHours < 24) {
+    return { timeText, label: '较久未看', level: 'stale', prominent: true };
+  }
+
+  if (diffDays < 7) {
+    return { timeText, label: '长期未看', level: 'old', prominent: true };
+  }
+
+  return { timeText, label: '可能遗忘', level: 'forgotten', prominent: true };
+}
+
+function renderTabAccessMeta(lastAccessed) {
+  const state = getTabAccessState(lastAccessed);
+  if (!state) return '';
+
+  const badge = state.prominent
+    ? `<span class="chip-access-badge chip-access-${state.level}">${state.label}</span>`
+    : '';
+
+  return `
+    <span class="chip-access-meta">
+      <span class="chip-access-time">${state.timeText}</span>
+      ${badge}
+    </span>`;
+}
+
 /**
  * getGreeting() — "早上好 / 下午好 / 晚上好"
  */
@@ -1036,9 +1089,13 @@ function renderDomainCard(group) {
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
     const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
     const safeTitle = label.replace(/"/g, '&quot;');
+    const accessMeta = renderTabAccessMeta(tab.lastAccessed);
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${renderFavicon(tab.url, 'chip-favicon', 16)}
-      <span class="chip-text">${label}</span>${dupeTag}
+      <span class="chip-content">
+        <span class="chip-text">${label}</span>
+        ${accessMeta}
+      </span>${dupeTag}
       <div class="chip-actions">
         <button class="chip-action chip-save" data-action="defer-single-tab" data-tab-url="${safeUrl}" data-tab-title="${safeTitle}" title="稍后处理">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M17.593 3.322c1.1.128 1.907 1.077 1.907 2.185V21L12 17.25 4.5 21V5.507c0-1.108.806-2.057 1.907-2.185a48.507 48.507 0 0 1 11.186 0Z" /></svg>
@@ -1850,6 +1907,14 @@ function installRealtimeBookmarkRefresh() {
   }
 }
 
+function installAccessStatusRefresh() {
+  setInterval(() => {
+    renderDashboard().catch(err => {
+      console.warn('[tab-out] Access status refresh failed:', err);
+    });
+  }, ACCESS_STATUS_REFRESH_MS);
+}
+
 
 /* ----------------------------------------------------------------
    EVENT HANDLERS — using event delegation
@@ -2499,4 +2564,5 @@ document.addEventListener('input', async (e) => {
    ---------------------------------------------------------------- */
 installRealtimeTabRefresh();
 installRealtimeBookmarkRefresh();
+installAccessStatusRefresh();
 renderDashboard();
