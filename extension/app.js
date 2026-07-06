@@ -1996,9 +1996,9 @@ function getQuickLinkDropTarget(container, x, y) {
   const cards = [...container.querySelectorAll('.quick-link-card:not(.dragging)')];
   return cards.find(card => {
     const rect = card.getBoundingClientRect();
-    const isAbove = y < rect.top + rect.height / 2;
-    const isSameRowBefore = y >= rect.top && y <= rect.bottom && x < rect.left + rect.width / 2;
-    return isAbove || isSameRowBefore;
+    const isSameRow = y >= rect.top && y <= rect.bottom;
+    if (isSameRow) return x < rect.left + rect.width / 2;
+    return y < rect.top + rect.height / 2;
   }) || null;
 }
 
@@ -2014,6 +2014,11 @@ document.addEventListener('pointerdown', (e) => {
   e.preventDefault();
   e.stopPropagation();
   const rect = card.getBoundingClientRect();
+  const placeholder = document.createElement('div');
+  placeholder.className = 'quick-link-placeholder';
+  placeholder.style.height = `${rect.height}px`;
+  container.insertBefore(placeholder, card);
+
   card.setPointerCapture(e.pointerId);
   card.classList.add('dragging');
   document.body.classList.add('quick-link-dragging');
@@ -2031,6 +2036,7 @@ document.addEventListener('pointerdown', (e) => {
   quickLinkDragState = {
     card,
     container,
+    placeholder,
     pointerId: e.pointerId,
     offsetX: e.clientX - rect.left,
     offsetY: e.clientY - rect.top,
@@ -2043,26 +2049,32 @@ document.addEventListener('pointerdown', (e) => {
 document.addEventListener('pointermove', (e) => {
   if (!quickLinkDragState) return;
 
-  const { card, container, offsetX, offsetY, startX, startY } = quickLinkDragState;
+  const { card, container, placeholder, offsetX, offsetY, startX, startY } = quickLinkDragState;
   card.style.left = `${e.clientX - offsetX}px`;
   card.style.top = `${e.clientY - offsetY}px`;
   quickLinkDragState.moved = Math.hypot(e.clientX - startX, e.clientY - startY) > 4;
 
   const dropTarget = getQuickLinkDropTarget(container, e.clientX, e.clientY);
-  if (dropTarget && dropTarget !== card) {
-    container.insertBefore(card, dropTarget);
+  if (dropTarget && dropTarget !== placeholder) {
+    container.insertBefore(placeholder, dropTarget);
   } else if (!dropTarget) {
-    container.appendChild(card);
+    container.appendChild(placeholder);
   }
 });
 
 async function finishQuickLinkDrag() {
   if (!quickLinkDragState) return;
 
-  const { card, pointerId, moved } = quickLinkDragState;
+  const { card, container, placeholder, pointerId, moved } = quickLinkDragState;
   try {
     if (card.hasPointerCapture(pointerId)) card.releasePointerCapture(pointerId);
   } catch {}
+
+  if (placeholder.parentNode) {
+    placeholder.replaceWith(card);
+  } else {
+    container.appendChild(card);
+  }
 
   card.classList.remove('dragging');
   Object.assign(card.style, {
