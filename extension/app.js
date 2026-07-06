@@ -28,7 +28,9 @@ let openTabs = [];
 
 const REALTIME_REFRESH_DEBOUNCE_MS = 250;
 const DEFERRED_ALL_GROUP_ID = '__all__';
+const BOOKMARKS_PREVIEW_LIMIT = 10;
 let realtimeRefreshTimer = null;
+let bookmarkRefreshTimer = null;
 let dashboardRenderPromise = null;
 let dashboardRenderQueued = false;
 let selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
@@ -36,6 +38,9 @@ let isDeferredItemSorting = false;
 let deferredItemDragState = null;
 let quickLinkDragState = null;
 let suppressNextQuickLinkOpen = false;
+let selectedBookmarkFolderId = null;
+let selectedBookmarkFolderTitle = '书签栏';
+let bookmarksExpanded = false;
 
 /**
  * fetchOpenTabs()
@@ -1312,6 +1317,146 @@ function renderArchiveItem(item) {
 
 
 /* ----------------------------------------------------------------
+   BROWSER BOOKMARKS — Render Chrome Bookmarks Bar
+   ---------------------------------------------------------------- */
+
+function hasBookmarksApi() {
+  return (
+    typeof chrome !== 'undefined' &&
+    chrome.bookmarks &&
+    typeof chrome.bookmarks.getTree === 'function' &&
+    typeof chrome.bookmarks.getChildren === 'function'
+  );
+}
+
+async function getBookmarkBarNode() {
+  if (!hasBookmarksApi()) return null;
+
+  const tree = await chrome.bookmarks.getTree();
+  const root = Array.isArray(tree) ? tree[0] : null;
+  const children = root && Array.isArray(root.children) ? root.children : [];
+
+  return (
+    children.find(node => node.id === '1') ||
+    children.find(node => /bookmarks bar|书签栏|收藏夹栏/i.test(node.title || '')) ||
+    children[0] ||
+    null
+  );
+}
+
+async function getBookmarkFolderChildren(folderId) {
+  if (!hasBookmarksApi() || !folderId) return [];
+  const children = await chrome.bookmarks.getChildren(folderId);
+  return Array.isArray(children) ? children : [];
+}
+
+async function ensureBookmarkFolderSelection() {
+  if (selectedBookmarkFolderId) return;
+
+  const bookmarkBar = await getBookmarkBarNode();
+  if (!bookmarkBar) return;
+
+  selectedBookmarkFolderId = bookmarkBar.id;
+  selectedBookmarkFolderTitle = bookmarkBar.title || '书签栏';
+}
+
+function renderBookmarkCard(node) {
+  const safeId = escapeHtml(node.id);
+  const safeTitle = escapeHtml(node.title || (node.url ? node.url : '未命名文件夹'));
+
+  if (!node.url) {
+    const childCount = Array.isArray(node.children) ? node.children.length : '';
+    return `
+      <button class="browser-bookmark-card is-folder" data-action="open-bookmark-folder" data-bookmark-id="${safeId}" data-bookmark-title="${safeTitle}" type="button" title="${safeTitle}">
+        <span class="browser-bookmark-folder-icon">文件夹</span>
+        <span class="browser-bookmark-info">
+          <span class="browser-bookmark-title">${safeTitle}</span>
+          <span class="browser-bookmark-domain">${childCount ? `${childCount} 项` : '文件夹'}</span>
+        </span>
+      </button>`;
+  }
+
+  const safeUrl = escapeHtml(node.url);
+  let domain = '';
+  try { domain = new URL(node.url).hostname.replace(/^www\./, ''); } catch {}
+
+  return `
+    <button class="browser-bookmark-card" data-action="open-browser-bookmark" data-bookmark-url="${safeUrl}" type="button" title="${safeTitle}">
+      ${renderFavicon(node.url, 'browser-bookmark-favicon', 32)}
+      <span class="browser-bookmark-info">
+        <span class="browser-bookmark-title">${safeTitle}</span>
+        <span class="browser-bookmark-domain">${escapeHtml(domain)}</span>
+      </span>
+    </button>`;
+}
+
+async function renderBrowserBookmarks() {
+  const section = document.getElementById('browserBookmarksSection');
+  const grid = document.getElementById('browserBookmarksGrid');
+  const countEl = document.getElementById('browserBookmarksCount');
+  const toolbar = document.getElementById('browserBookmarksToolbar');
+  const backBtn = document.getElementById('bookmarkFolderBack');
+  const expandBtn = document.getElementById('bookmarkExpandToggle');
+  if (!section || !grid) return;
+
+  if (!hasBookmarksApi()) {
+    section.style.display = 'none';
+    return;
+  }
+
+  try {
+    await ensureBookmarkFolderSelection();
+    if (!selectedBookmarkFolderId) {
+      section.style.display = 'none';
+      return;
+    }
+
+    const bookmarkBar = await getBookmarkBarNode();
+    const isBookmarkBar = !bookmarkBar || selectedBookmarkFolderId === bookmarkBar.id;
+    const children = await getBookmarkFolderChildren(selectedBookmarkFolderId);
+    const visibleChildren = bookmarksExpanded
+      ? children
+      : children.slice(0, BOOKMARKS_PREVIEW_LIMIT);
+
+    section.style.display = 'block';
+    if (countEl) {
+      countEl.textContent = `${selectedBookmarkFolderTitle || '书签栏'} · ${children.length} 项`;
+    }
+
+    if (toolbar) toolbar.style.display = children.length > BOOKMARKS_PREVIEW_LIMIT || !isBookmarkBar ? 'flex' : 'none';
+    if (backBtn) backBtn.style.display = isBookmarkBar ? 'none' : 'inline-flex';
+    if (expandBtn) {
+      expandBtn.style.display = children.length > BOOKMARKS_PREVIEW_LIMIT ? 'inline-flex' : 'none';
+      expandBtn.textContent = bookmarksExpanded ? '收起' : `显示更多 ${children.length - BOOKMARKS_PREVIEW_LIMIT} 项`;
+    }
+
+    if (children.length === 0) {
+      grid.innerHTML = `
+        <div class="browser-bookmarks-empty">
+          当前收藏夹没有内容。
+        </div>`;
+      return;
+    }
+
+    grid.innerHTML = visibleChildren.map(renderBookmarkCard).join('');
+  } catch (err) {
+    console.warn('[tab-out] Could not load browser bookmarks:', err);
+    section.style.display = 'none';
+  }
+}
+
+async function resetBookmarkFolderToBar() {
+  const bookmarkBar = await getBookmarkBarNode();
+  if (!bookmarkBar) return;
+
+  selectedBookmarkFolderId = bookmarkBar.id;
+  selectedBookmarkFolderTitle = bookmarkBar.title || '书签栏';
+  bookmarksExpanded = false;
+  await renderBrowserBookmarks();
+}
+
+
+/* ----------------------------------------------------------------
    QUICK LINKS — Render Navigation Shortcuts
    ---------------------------------------------------------------- */
 
@@ -1421,6 +1566,9 @@ async function renderStaticDashboard() {
   const dateEl     = document.getElementById('dateDisplay');
   if (greetingEl) greetingEl.textContent = getGreeting();
   if (dateEl)     dateEl.textContent     = getDateDisplay();
+
+  // --- Render browser bookmarks bar ---
+  await renderBrowserBookmarks();
 
   // --- Render custom quick navigation links ---
   await renderQuickLinks();
@@ -1634,6 +1782,39 @@ function installRealtimeTabRefresh() {
   });
 }
 
+function scheduleBookmarkRefresh() {
+  if (bookmarkRefreshTimer !== null) clearTimeout(bookmarkRefreshTimer);
+
+  bookmarkRefreshTimer = setTimeout(() => {
+    bookmarkRefreshTimer = null;
+    renderBrowserBookmarks().catch(err => {
+      console.warn('[tab-out] Bookmark refresh failed:', err);
+    });
+  }, REALTIME_REFRESH_DEBOUNCE_MS);
+}
+
+function installRealtimeBookmarkRefresh() {
+  if (
+    typeof chrome === 'undefined' ||
+    !chrome.bookmarks ||
+    !chrome.bookmarks.onCreated ||
+    !chrome.bookmarks.onRemoved ||
+    !chrome.bookmarks.onChanged ||
+    !chrome.bookmarks.onMoved
+  ) {
+    return;
+  }
+
+  chrome.bookmarks.onCreated.addListener(scheduleBookmarkRefresh);
+  chrome.bookmarks.onRemoved.addListener(scheduleBookmarkRefresh);
+  chrome.bookmarks.onChanged.addListener(scheduleBookmarkRefresh);
+  chrome.bookmarks.onMoved.addListener(scheduleBookmarkRefresh);
+
+  if (chrome.bookmarks.onChildrenReordered) {
+    chrome.bookmarks.onChildrenReordered.addListener(scheduleBookmarkRefresh);
+  }
+}
+
 
 /* ----------------------------------------------------------------
    EVENT HANDLERS — using event delegation
@@ -1654,6 +1835,35 @@ document.addEventListener('click', async (e) => {
   if (action === 'drag-quick-link') {
     e.preventDefault();
     e.stopPropagation();
+    return;
+  }
+
+  // ---- Open a browser bookmark ----
+  if (action === 'open-browser-bookmark') {
+    const url = actionEl.dataset.bookmarkUrl;
+    if (url) await openQuickLink(url);
+    return;
+  }
+
+  // ---- Enter a browser bookmark folder ----
+  if (action === 'open-bookmark-folder') {
+    selectedBookmarkFolderId = actionEl.dataset.bookmarkId || selectedBookmarkFolderId;
+    selectedBookmarkFolderTitle = actionEl.dataset.bookmarkTitle || '收藏夹';
+    bookmarksExpanded = false;
+    await renderBrowserBookmarks();
+    return;
+  }
+
+  // ---- Return to the browser bookmarks bar ----
+  if (action === 'bookmark-folder-back') {
+    await resetBookmarkFolderToBar();
+    return;
+  }
+
+  // ---- Expand/collapse browser bookmarks preview ----
+  if (action === 'toggle-bookmarks-expanded') {
+    bookmarksExpanded = !bookmarksExpanded;
+    await renderBrowserBookmarks();
     return;
   }
 
@@ -2236,4 +2446,5 @@ document.addEventListener('input', async (e) => {
    INITIALIZE
    ---------------------------------------------------------------- */
 installRealtimeTabRefresh();
+installRealtimeBookmarkRefresh();
 renderDashboard();

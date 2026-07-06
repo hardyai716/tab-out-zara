@@ -603,6 +603,100 @@ header {
   color: var(--status-abandoned);
 }
 
+/* ---- Browser Bookmarks ---- */
+.browser-bookmarks-section {
+  margin-bottom: 28px;
+}
+
+.browser-bookmarks-toolbar {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.browser-bookmarks-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.browser-bookmark-card {
+  font-family: 'DM Sans', sans-serif;
+  text-align: left;
+  background: rgba(255, 253, 249, 0.82);
+  border: 1px solid var(--warm-gray);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: pointer;
+  min-width: 0;
+  transition: box-shadow 0.2s, transform 0.2s, border-color 0.2s, background 0.2s;
+}
+
+.browser-bookmark-card:hover {
+  box-shadow: 0 4px 20px var(--shadow);
+  transform: translateY(-1px);
+  border-color: rgba(90, 122, 98, 0.3);
+  background: var(--card-bg);
+}
+
+.browser-bookmark-card.is-folder {
+  border-style: dashed;
+}
+
+.browser-bookmark-favicon {
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+
+.browser-bookmark-folder-icon {
+  font-size: 10px;
+  color: var(--accent-sage);
+  background: rgba(90, 122, 98, 0.08);
+  border: 1px solid rgba(90, 122, 98, 0.18);
+  border-radius: 6px;
+  padding: 4px 6px;
+  flex-shrink: 0;
+}
+
+.browser-bookmark-info {
+  min-width: 0;
+  flex: 1;
+}
+
+.browser-bookmark-title {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.browser-bookmark-domain {
+  display: block;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+
+.browser-bookmarks-empty {
+  border: 1px dashed var(--warm-gray);
+  border-radius: 8px;
+  padding: 18px;
+  color: var(--muted);
+  font-size: 13px;
+  background: rgba(255, 253, 249, 0.55);
+}
+
 /* ---- Quick Links ---- */
 .quick-links-section {
   margin-bottom: 36px;
@@ -859,7 +953,8 @@ footer {
 header { animation: fadeUp 0.5s ease both; }
 .tab-cleanup-banner { animation: fadeUp 0.5s ease 0.1s both; }
 .nudge-banner { animation: fadeUp 0.5s ease 0.15s both; }
-.quick-links-section { animation: fadeUp 0.5s ease 0.16s both; }
+.browser-bookmarks-section { animation: fadeUp 0.5s ease 0.16s both; }
+.quick-links-section { animation: fadeUp 0.5s ease 0.18s both; }
 .active-section .section-header { animation: fadeUp 0.5s ease 0.2s both; }
 .active-section .missions .mission-card:nth-child(1) { animation: fadeUp 0.4s ease 0.25s both; }
 .active-section .missions .mission-card:nth-child(2) { animation: fadeUp 0.4s ease 0.3s both; }
@@ -1112,6 +1207,7 @@ footer { animation: fadeUp 0.5s ease 0.65s both; }
 }
 
 @media (max-width: 1200px) {
+  .browser-bookmarks-grid,
   .quick-links-grid {
     grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   }

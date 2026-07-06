@@ -47,6 +47,24 @@
   </div>
 
   <!-- ================================================================
+       BROWSER BOOKMARKS — Chrome bookmarks bar
+       ================================================================ -->
+  <section class="browser-bookmarks-section" id="browserBookmarksSection" style="display:none">
+    <div class="section-header">
+      <h2>浏览器收藏夹</h2>
+      <div class="section-line"></div>
+      <div class="section-count" id="browserBookmarksCount"></div>
+    </div>
+
+    <div class="browser-bookmarks-toolbar" id="browserBookmarksToolbar" style="display:none">
+      <button class="action-btn" data-action="bookmark-folder-back" id="bookmarkFolderBack" style="display:none">返回书签栏</button>
+      <button class="action-btn" data-action="toggle-bookmarks-expanded" id="bookmarkExpandToggle" style="display:none">显示更多</button>
+    </div>
+
+    <div class="browser-bookmarks-grid" id="browserBookmarksGrid"></div>
+  </section>
+
+  <!-- ================================================================
        QUICK LINKS — user-defined navigation shortcuts
        ================================================================ -->
   <section class="quick-links-section" id="quickLinksSection">
