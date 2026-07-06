@@ -2013,17 +2013,41 @@ document.addEventListener('pointerdown', (e) => {
 
   e.preventDefault();
   e.stopPropagation();
+  const rect = card.getBoundingClientRect();
   card.setPointerCapture(e.pointerId);
   card.classList.add('dragging');
   document.body.classList.add('quick-link-dragging');
-  quickLinkDragState = { card, container, pointerId: e.pointerId, moved: false };
+
+  Object.assign(card.style, {
+    position: 'fixed',
+    left: `${rect.left}px`,
+    top: `${rect.top}px`,
+    width: `${rect.width}px`,
+    height: `${rect.height}px`,
+    zIndex: '1000',
+    pointerEvents: 'none',
+  });
+
+  quickLinkDragState = {
+    card,
+    container,
+    pointerId: e.pointerId,
+    offsetX: e.clientX - rect.left,
+    offsetY: e.clientY - rect.top,
+    startX: e.clientX,
+    startY: e.clientY,
+    moved: false,
+  };
 });
 
 document.addEventListener('pointermove', (e) => {
   if (!quickLinkDragState) return;
 
-  const { card, container } = quickLinkDragState;
-  quickLinkDragState.moved = true;
+  const { card, container, offsetX, offsetY, startX, startY } = quickLinkDragState;
+  card.style.left = `${e.clientX - offsetX}px`;
+  card.style.top = `${e.clientY - offsetY}px`;
+  quickLinkDragState.moved = Math.hypot(e.clientX - startX, e.clientY - startY) > 4;
+
   const dropTarget = getQuickLinkDropTarget(container, e.clientX, e.clientY);
   if (dropTarget && dropTarget !== card) {
     container.insertBefore(card, dropTarget);
@@ -2035,8 +2059,21 @@ document.addEventListener('pointermove', (e) => {
 async function finishQuickLinkDrag() {
   if (!quickLinkDragState) return;
 
-  const { card, moved } = quickLinkDragState;
+  const { card, pointerId, moved } = quickLinkDragState;
+  try {
+    if (card.hasPointerCapture(pointerId)) card.releasePointerCapture(pointerId);
+  } catch {}
+
   card.classList.remove('dragging');
+  Object.assign(card.style, {
+    position: '',
+    left: '',
+    top: '',
+    width: '',
+    height: '',
+    zIndex: '',
+    pointerEvents: '',
+  });
   document.body.classList.remove('quick-link-dragging');
   quickLinkDragState = null;
 
