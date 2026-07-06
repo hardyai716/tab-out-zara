@@ -2018,6 +2018,7 @@ document.addEventListener('pointerdown', (e) => {
   placeholder.className = 'quick-link-placeholder';
   placeholder.style.height = `${rect.height}px`;
   container.insertBefore(placeholder, card);
+  document.body.appendChild(card);
 
   card.setPointerCapture(e.pointerId);
   card.classList.add('dragging');
