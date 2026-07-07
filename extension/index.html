@@ -49,41 +49,59 @@
   <!-- ================================================================
        BROWSER BOOKMARKS — Chrome bookmarks bar
        ================================================================ -->
-  <section class="browser-bookmarks-section" id="browserBookmarksSection" style="display:none">
+  <section class="browser-bookmarks-section" id="browserBookmarksSection" data-module-section="browserBookmarks" style="display:none">
     <div class="section-header">
       <h2>浏览器收藏夹</h2>
       <div class="section-line"></div>
       <div class="section-count" id="browserBookmarksCount"></div>
+      <button class="section-control" data-action="toggle-module-collapse" data-module-id="browserBookmarks" data-module-collapse-toggle="browserBookmarks" id="browserBookmarksCollapseToggle">展开</button>
+      <button class="section-control" data-action="hide-module" data-module-id="browserBookmarks">隐藏</button>
     </div>
 
-    <div class="browser-bookmarks-toolbar" id="browserBookmarksToolbar" style="display:none">
-      <button class="action-btn" data-action="bookmark-folder-back" id="bookmarkFolderBack" style="display:none">返回书签栏</button>
-      <button class="action-btn" data-action="toggle-bookmarks-expanded" id="bookmarkExpandToggle" style="display:none">显示更多</button>
-    </div>
+    <div class="module-body" id="browserBookmarksBody" data-module-body="browserBookmarks">
+      <div class="browser-bookmarks-toolbar" id="browserBookmarksToolbar" style="display:none">
+        <button class="action-btn" data-action="bookmark-folder-back" id="bookmarkFolderBack" style="display:none">返回书签栏</button>
+        <button class="action-btn" data-action="toggle-bookmarks-expanded" id="bookmarkExpandToggle" style="display:none">显示更多</button>
+      </div>
 
-    <div class="browser-bookmarks-grid" id="browserBookmarksGrid"></div>
+      <div class="browser-bookmarks-grid" id="browserBookmarksGrid"></div>
+    </div>
   </section>
+
+  <div class="module-hidden-notice" id="browserBookmarksHiddenNotice" data-module-hidden-notice="browserBookmarks" style="display:none">
+    <span>浏览器收藏夹已隐藏</span>
+    <button class="section-control" data-action="show-module" data-module-id="browserBookmarks">显示</button>
+  </div>
 
   <!-- ================================================================
        QUICK LINKS — user-defined navigation shortcuts
        ================================================================ -->
-  <section class="quick-links-section" id="quickLinksSection">
+  <section class="quick-links-section" id="quickLinksSection" data-module-section="quickLinks">
     <div class="section-header">
       <h2>常用导航</h2>
       <div class="section-line"></div>
       <div class="section-count" id="quickLinksCount"></div>
+      <button class="section-control" data-action="toggle-module-collapse" data-module-id="quickLinks" data-module-collapse-toggle="quickLinks" id="quickLinksCollapseToggle">收起</button>
+      <button class="section-control" data-action="hide-module" data-module-id="quickLinks">隐藏</button>
     </div>
 
-    <form class="quick-link-form" id="quickLinkForm">
-      <input type="hidden" id="quickLinkEditingId">
-      <input type="text" id="quickLinkUrl" placeholder="先粘贴网址，例如 docs.example.com" autocomplete="off">
-      <input type="text" id="quickLinkTitle" placeholder="名称会自动识别，也可以手动修改" autocomplete="off">
-      <button type="submit" class="action-btn primary" id="quickLinkSubmit">添加</button>
-      <button type="button" class="action-btn" id="quickLinkCancel" data-action="cancel-quick-link-edit" style="display:none">取消</button>
-    </form>
+    <div class="module-body" id="quickLinksBody" data-module-body="quickLinks">
+      <form class="quick-link-form" id="quickLinkForm">
+        <input type="hidden" id="quickLinkEditingId">
+        <input type="text" id="quickLinkUrl" placeholder="先粘贴网址，例如 docs.example.com" autocomplete="off">
+        <input type="text" id="quickLinkTitle" placeholder="名称会自动识别，也可以手动修改" autocomplete="off">
+        <button type="submit" class="action-btn primary" id="quickLinkSubmit">添加</button>
+        <button type="button" class="action-btn" id="quickLinkCancel" data-action="cancel-quick-link-edit" style="display:none">取消</button>
+      </form>
 
-    <div class="quick-links-grid" id="quickLinksGrid"></div>
+      <div class="quick-links-grid" id="quickLinksGrid"></div>
+    </div>
   </section>
+
+  <div class="module-hidden-notice" id="quickLinksHiddenNotice" data-module-hidden-notice="quickLinks" style="display:none">
+    <span>常用导航已隐藏</span>
+    <button class="section-control" data-action="show-module" data-module-id="quickLinks">显示</button>
+  </div>
 
   <!-- ================================================================
        MAIN CONTENT AREA — two-column layout

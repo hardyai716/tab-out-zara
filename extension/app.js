@@ -30,6 +30,10 @@ const REALTIME_REFRESH_DEBOUNCE_MS = 250;
 const ACCESS_STATUS_REFRESH_MS = 60000;
 const DEFERRED_ALL_GROUP_ID = '__all__';
 const BOOKMARKS_PREVIEW_LIMIT = 10;
+const DEFAULT_MODULE_PREFS = {
+  browserBookmarks: { visible: true, collapsed: true },
+  quickLinks:       { visible: true, collapsed: false },
+};
 let realtimeRefreshTimer = null;
 let bookmarkRefreshTimer = null;
 let dashboardRenderPromise = null;
@@ -43,6 +47,10 @@ let quickLinkTitleManuallyEdited = false;
 let selectedBookmarkFolderId = null;
 let selectedBookmarkFolderTitle = '书签栏';
 let bookmarksExpanded = false;
+let modulePrefs = {
+  browserBookmarks: { ...DEFAULT_MODULE_PREFS.browserBookmarks },
+  quickLinks:       { ...DEFAULT_MODULE_PREFS.quickLinks },
+};
 
 /**
  * fetchOpenTabs()
@@ -348,6 +356,46 @@ function renderFavicon(pageUrl, className, size = 16, extraAttrs = '') {
   if (!faviconUrl) return '';
 
   return `<img class="${className}" src="${escapeHtml(faviconUrl)}" alt="" ${extraAttrs} onerror="this.style.display='none'">`;
+}
+
+function normalizeModulePrefs(rawPrefs = {}) {
+  return Object.fromEntries(Object.entries(DEFAULT_MODULE_PREFS).map(([moduleId, defaults]) => {
+    const stored = rawPrefs[moduleId] || {};
+    return [moduleId, {
+      visible: typeof stored.visible === 'boolean' ? stored.visible : defaults.visible,
+      collapsed: typeof stored.collapsed === 'boolean' ? stored.collapsed : defaults.collapsed,
+    }];
+  }));
+}
+
+async function loadModulePrefs() {
+  try {
+    const { dashboardModulePrefs = {} } = await chrome.storage.local.get('dashboardModulePrefs');
+    modulePrefs = normalizeModulePrefs(dashboardModulePrefs);
+  } catch {
+    modulePrefs = normalizeModulePrefs();
+  }
+}
+
+async function saveModulePrefs() {
+  await chrome.storage.local.set({ dashboardModulePrefs: modulePrefs });
+}
+
+function applyModuleState(moduleId) {
+  const pref = modulePrefs[moduleId] || DEFAULT_MODULE_PREFS[moduleId];
+  if (!pref) return false;
+
+  const section = document.querySelector(`[data-module-section="${moduleId}"]`);
+  const body = document.querySelector(`[data-module-body="${moduleId}"]`);
+  const hiddenNotice = document.querySelector(`[data-module-hidden-notice="${moduleId}"]`);
+  const collapseToggle = document.querySelector(`[data-module-collapse-toggle="${moduleId}"]`);
+
+  if (section) section.style.display = pref.visible ? 'block' : 'none';
+  if (hiddenNotice) hiddenNotice.style.display = pref.visible ? 'none' : 'flex';
+  if (body) body.style.display = pref.visible && !pref.collapsed ? 'block' : 'none';
+  if (collapseToggle) collapseToggle.textContent = pref.collapsed ? '展开' : '收起';
+
+  return pref.visible;
 }
 
 function normalizeQuickLinkUrl(rawUrl) {
@@ -1494,6 +1542,9 @@ async function renderBrowserBookmarks() {
     return;
   }
 
+  const isVisible = applyModuleState('browserBookmarks');
+  if (!isVisible) return;
+
   try {
     await ensureBookmarkFolderSelection();
     if (!selectedBookmarkFolderId) {
@@ -1508,7 +1559,7 @@ async function renderBrowserBookmarks() {
       ? children
       : children.slice(0, BOOKMARKS_PREVIEW_LIMIT);
 
-    section.style.display = 'block';
+    applyModuleState('browserBookmarks');
     if (countEl) {
       countEl.textContent = `${selectedBookmarkFolderTitle || '书签栏'} · ${children.length} 项`;
     }
@@ -1556,8 +1607,12 @@ async function renderQuickLinks() {
   const countEl = document.getElementById('quickLinksCount');
   if (!section || !grid) return;
 
+  const isVisible = applyModuleState('quickLinks');
+  if (!isVisible) return;
+
   try {
     const quickLinks = await getQuickLinks();
+    applyModuleState('quickLinks');
 
     if (countEl) countEl.textContent = quickLinks.length > 0 ? `${quickLinks.length} 个快捷入口` : '';
 
@@ -1930,6 +1985,40 @@ document.addEventListener('click', async (e) => {
   if (!actionEl) return;
 
   const action = actionEl.dataset.action;
+
+  // ---- Dashboard module visibility/collapse controls ----
+  if (action === 'toggle-module-collapse') {
+    const moduleId = actionEl.dataset.moduleId;
+    if (!modulePrefs[moduleId]) return;
+
+    modulePrefs[moduleId].collapsed = !modulePrefs[moduleId].collapsed;
+    applyModuleState(moduleId);
+    await saveModulePrefs();
+    return;
+  }
+
+  if (action === 'hide-module') {
+    const moduleId = actionEl.dataset.moduleId;
+    if (!modulePrefs[moduleId]) return;
+
+    modulePrefs[moduleId].visible = false;
+    applyModuleState(moduleId);
+    await saveModulePrefs();
+    return;
+  }
+
+  if (action === 'show-module') {
+    const moduleId = actionEl.dataset.moduleId;
+    if (!modulePrefs[moduleId]) return;
+
+    modulePrefs[moduleId].visible = true;
+    modulePrefs[moduleId].collapsed = false;
+    applyModuleState(moduleId);
+    await saveModulePrefs();
+    if (moduleId === 'browserBookmarks') await renderBrowserBookmarks();
+    if (moduleId === 'quickLinks') await renderQuickLinks();
+    return;
+  }
 
   // ---- Drag handle for quick navigation ordering ----
   if (action === 'drag-quick-link') {
@@ -2562,7 +2651,14 @@ document.addEventListener('input', async (e) => {
 /* ----------------------------------------------------------------
    INITIALIZE
    ---------------------------------------------------------------- */
-installRealtimeTabRefresh();
-installRealtimeBookmarkRefresh();
-installAccessStatusRefresh();
-renderDashboard();
+async function initializeDashboard() {
+  await loadModulePrefs();
+  installRealtimeTabRefresh();
+  installRealtimeBookmarkRefresh();
+  installAccessStatusRefresh();
+  await renderDashboard();
+}
+
+initializeDashboard().catch(err => {
+  console.warn('[tab-out] Dashboard initialization failed:', err);
+});
