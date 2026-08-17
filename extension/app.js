@@ -33,6 +33,7 @@ const BOOKMARKS_PREVIEW_LIMIT = 10;
 const DEFAULT_MODULE_PREFS = {
   browserBookmarks: { visible: true, collapsed: true },
   quickLinks:       { visible: true, collapsed: false },
+  deferred:         { visible: true, collapsed: false },
 };
 let realtimeRefreshTimer = null;
 let bookmarkRefreshTimer = null;
@@ -50,6 +51,7 @@ let bookmarksExpanded = false;
 let modulePrefs = {
   browserBookmarks: { ...DEFAULT_MODULE_PREFS.browserBookmarks },
   quickLinks:       { ...DEFAULT_MODULE_PREFS.quickLinks },
+  deferred:         { ...DEFAULT_MODULE_PREFS.deferred },
 };
 
 /**
@@ -1202,7 +1204,7 @@ function renderDomainCard(group) {
 
 
 /* ----------------------------------------------------------------
-   SAVED FOR LATER — Render Checklist Column
+   SAVED FOR LATER — Render Checklist Section
    ---------------------------------------------------------------- */
 
 function getDeferredGroupId(item) {
@@ -1297,39 +1299,35 @@ function renderDeferredSortControls(visibleActive) {
   if (reset) reset.style.display = hasCustomDeferredItemOrder(visibleActive) ? 'inline-flex' : 'none';
 }
 
-function renderDeferredGroupTabs(groups, activeCount) {
+function hideDeferredGroupTabs() {
   const tabsEl   = document.getElementById('deferredGroupTabs');
   if (!tabsEl) return;
 
-  const hasGroups = groups.length > 0;
-  tabsEl.style.display = hasGroups ? 'flex' : 'none';
+  tabsEl.style.display = 'none';
+  tabsEl.innerHTML = '';
+}
 
-  const allActive = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID ? ' active' : '';
-  const groupTabs = groups.map(group => {
-    const active = selectedDeferredGroupId === group.id ? ' active' : '';
-    const safeId = escapeHtml(group.id);
-    const safeLabel = escapeHtml(group.label);
+function renderDeferredGroupCard(group) {
+  const safeLabel = escapeHtml(group.label);
+  const orderedItems = applyDeferredItemOrder(group.items);
 
-    return `
-      <button class="deferred-group-tab${active}" data-action="select-deferred-group" data-deferred-group-id="${safeId}" type="button">
-        <span class="deferred-group-label">${safeLabel}</span>
-        <span class="deferred-group-count">${group.items.length}</span>
-      </button>`;
-  }).join('');
-
-  tabsEl.innerHTML = `
-    <button class="deferred-group-tab is-all${allActive}" data-action="select-deferred-group" data-deferred-group-id="${DEFERRED_ALL_GROUP_ID}" type="button">
-      <span class="deferred-group-label">全部</span>
-      <span class="deferred-group-count">${activeCount}</span>
-    </button>
-    ${groupTabs}`;
+  return `
+    <article class="deferred-group-card">
+      <div class="deferred-group-card-header">
+        <h3 class="deferred-group-card-title" title="${safeLabel}">${safeLabel}</h3>
+        <span class="deferred-group-card-count">${orderedItems.length} 项</span>
+      </div>
+      <div class="deferred-group-card-items">
+        ${orderedItems.map(item => renderDeferredItem(item, { showDomain: false })).join('')}
+      </div>
+    </article>`;
 }
 
 /**
  * renderDeferredColumn()
  *
- * Reads saved tabs from chrome.storage.local and renders the right-side
- * "Saved for Later" checklist column. Shows active items as a checklist
+ * Reads saved tabs from chrome.storage.local and renders the top
+ * "Saved for Later" checklist section. Shows active items as a checklist
  * and completed items in a collapsible archive.
  */
 async function renderDeferredColumn() {
@@ -1340,52 +1338,42 @@ async function renderDeferredColumn() {
   const archiveEl      = document.getElementById('deferredArchive');
   const archiveCountEl = document.getElementById('archiveCount');
   const archiveList    = document.getElementById('archiveList');
+  const hiddenNotice   = document.querySelector('[data-module-hidden-notice="deferred"]');
 
   if (!column) return;
 
   try {
     const { active, archived } = await getSavedTabs();
 
-    // Hide the entire column if there's nothing to show
+    // Hide the entire section if there's nothing to show.
     if (active.length === 0 && archived.length === 0) {
       column.style.display = 'none';
+      if (hiddenNotice) hiddenNotice.style.display = 'none';
       return;
     }
 
-    column.style.display = 'block';
+    const isVisible = applyModuleState('deferred');
+    if (!isVisible) return;
+
     const groups = buildDeferredGroups(active);
-    const groupIds = new Set(groups.map(group => group.id));
+    selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
+    isDeferredItemSorting = false;
+    hideDeferredGroupTabs();
+    renderDeferredSortControls([]);
 
-    if (selectedDeferredGroupId !== DEFERRED_ALL_GROUP_ID && !groupIds.has(selectedDeferredGroupId)) {
-      selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
-      isDeferredItemSorting = false;
-    }
-
-    renderDeferredGroupTabs(groups, active.length);
-
-    // Render active checklist items
+    // Render active items as domain groups; CSS lays each group's items out in columns.
     if (active.length > 0) {
-      const selectedGroup = groups.find(group => group.id === selectedDeferredGroupId);
-      const visibleActiveRaw = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
-        ? active
-        : (selectedGroup ? selectedGroup.items : active);
-      const visibleActive = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
-        ? visibleActiveRaw
-        : applyDeferredItemOrder(visibleActiveRaw);
-
-      countEl.textContent = selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID
-        ? `${active.length} 项`
-        : `${visibleActive.length}/${active.length} 项`;
-      renderDeferredSortControls(visibleActive);
-      list.innerHTML = visibleActive.map(item => renderDeferredItem(item)).join('');
+      countEl.textContent = `${groups.length} 个域名分组 · ${active.length} 项`;
+      list.className = 'deferred-list is-grouped';
+      list.innerHTML = groups.map(renderDeferredGroupCard).join('');
       list.style.display = 'block';
       empty.style.display = 'none';
     } else {
+      list.className = 'deferred-list';
       list.style.display = 'none';
       countEl.textContent = '';
       empty.style.display = 'block';
-      renderDeferredGroupTabs([], 0);
-      renderDeferredSortControls([]);
+      hideDeferredGroupTabs();
     }
 
     // Render archive section
@@ -1400,6 +1388,7 @@ async function renderDeferredColumn() {
   } catch (err) {
     console.warn('[tab-out] Could not load saved tabs:', err);
     column.style.display = 'none';
+    if (hiddenNotice) hiddenNotice.style.display = 'none';
   }
 }
 
@@ -1409,10 +1398,15 @@ async function renderDeferredColumn() {
  * Builds HTML for one active checklist item: checkbox, title link,
  * domain, time ago, dismiss button.
  */
-function renderDeferredItem(item) {
+function renderDeferredItem(item, options = {}) {
+  const { showDomain = true } = options;
   let domain = '';
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
   const ago = timeAgo(item.savedAt);
+  const metaParts = [
+    showDomain && domain ? `<span>${domain}</span>` : '',
+    `<span>${ago}</span>`,
+  ].filter(Boolean).join('');
   const sortClass = isDeferredItemSorting ? ' sorting' : '';
   const handle = isDeferredItemSorting
     ? '<button class="deferred-item-drag" type="button" title="拖拽调整优先级" aria-label="拖拽调整优先级">☰</button>'
@@ -1427,8 +1421,7 @@ function renderDeferredItem(item) {
           ${renderFavicon(item.url, 'deferred-favicon', 16)}${item.title || item.url}
         </a>
         <div class="deferred-meta">
-          <span>${domain}</span>
-          <span>${ago}</span>
+          ${metaParts}
         </div>
       </div>
       <button class="deferred-dismiss" data-action="dismiss-deferred" data-deferred-id="${item.id}" title="移除">
@@ -1720,6 +1713,9 @@ async function renderStaticDashboard() {
   // --- Render custom quick navigation links ---
   await renderQuickLinks();
 
+  // --- Render "Saved for Later" section ---
+  await renderDeferredColumn();
+
   // --- Fetch tabs ---
   await fetchOpenTabs();
   const realTabs = getRealTabs();
@@ -1858,8 +1854,6 @@ async function renderStaticDashboard() {
   // --- Check for duplicate Tab Out tabs ---
   checkTabOutDupes();
 
-  // --- Render "Saved for Later" column ---
-  await renderDeferredColumn();
 }
 
 async function renderDashboard() {
@@ -2017,6 +2011,7 @@ document.addEventListener('click', async (e) => {
     await saveModulePrefs();
     if (moduleId === 'browserBookmarks') await renderBrowserBookmarks();
     if (moduleId === 'quickLinks') await renderQuickLinks();
+    if (moduleId === 'deferred') await renderDeferredColumn();
     return;
   }
 

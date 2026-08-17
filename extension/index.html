@@ -104,31 +104,18 @@
   </div>
 
   <!-- ================================================================
-       MAIN CONTENT AREA — two-column layout
-       Left: open tabs (domain/mission cards)
-       Right: saved for later checklist
-       The right column only renders when it has items (JS controls this)
+       SAVED FOR LATER — prioritized reading queue
        ================================================================ -->
-  <div class="dashboard-columns" id="dashboardColumns">
-
-    <!-- LEFT COLUMN: Open tabs -->
-    <div class="active-section" id="openTabsSection" style="display:none">
-      <div class="section-header">
-        <h2 id="openTabsSectionTitle">当前标签页</h2>
-        <div class="section-line"></div>
-        <div class="section-count" id="openTabsSectionCount"></div>
-      </div>
-      <div class="missions" id="openTabsMissions"></div>
+  <section class="deferred-section" id="deferredColumn" data-module-section="deferred" style="display:none">
+    <div class="section-header">
+      <h2>稍后处理</h2>
+      <div class="section-line"></div>
+      <div class="section-count" id="deferredCount"></div>
+      <button class="section-control" data-action="toggle-module-collapse" data-module-id="deferred" data-module-collapse-toggle="deferred" id="deferredCollapseToggle">收起</button>
+      <button class="section-control" data-action="hide-module" data-module-id="deferred">隐藏</button>
     </div>
 
-    <!-- RIGHT COLUMN: Saved for Later checklist -->
-    <div class="deferred-column" id="deferredColumn" style="display:none">
-      <div class="section-header">
-        <h2>稍后处理</h2>
-        <div class="section-line"></div>
-        <div class="section-count" id="deferredCount"></div>
-      </div>
-
+    <div class="module-body" id="deferredBody" data-module-body="deferred">
       <div class="deferred-group-controls" id="deferredGroupControls" style="display:none">
         <button class="action-btn" data-action="toggle-deferred-group-sort" id="deferredSortToggle">调整优先级</button>
         <button class="action-btn" data-action="reset-deferred-group-sort" id="deferredSortReset">恢复默认</button>
@@ -157,6 +144,27 @@
         </div>
       </div>
     </div>
+  </section>
+
+  <div class="module-hidden-notice" id="deferredHiddenNotice" data-module-hidden-notice="deferred" style="display:none">
+    <span>稍后处理已隐藏</span>
+    <button class="section-control" data-action="show-module" data-module-id="deferred">显示</button>
+  </div>
+
+  <!-- ================================================================
+       MAIN CONTENT AREA — open tabs (domain/mission cards)
+       ================================================================ -->
+  <div class="dashboard-columns" id="dashboardColumns">
+
+    <!-- Open tabs -->
+    <section class="active-section" id="openTabsSection" style="display:none">
+      <div class="section-header">
+        <h2 id="openTabsSectionTitle">当前标签页</h2>
+        <div class="section-line"></div>
+        <div class="section-count" id="openTabsSectionCount"></div>
+      </div>
+      <div class="missions" id="openTabsMissions"></div>
+    </section>
 
   </div><!-- end .dashboard-columns -->
 
