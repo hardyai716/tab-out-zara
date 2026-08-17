@@ -1519,10 +1519,6 @@ function applyDeferredItemOrder(items) {
   });
 }
 
-function hasCustomDeferredItemOrder(items) {
-  return items.some(item => Number.isFinite(item.sortIndex));
-}
-
 async function saveDeferredItemOrderFromDom() {
   const orderByGroup = new Map();
   const groupContainers = [...document.querySelectorAll('.deferred-group-card-items')];
@@ -1554,22 +1550,9 @@ async function saveDeferredItemOrderFromDom() {
   });
 }
 
-async function resetDeferredItemSort(groupId = DEFERRED_ALL_GROUP_ID) {
-  isDeferredItemSorting = false;
-  await mutateStoredArray('deferred', deferred => {
-    for (const item of deferred) {
-      if (groupId === DEFERRED_ALL_GROUP_ID || getDeferredGroupId(item) === groupId) {
-        delete item.sortIndex;
-      }
-    }
-  });
-  await renderDeferredColumn();
-}
-
 function renderDeferredSortControls(visibleActive) {
   const controls = document.getElementById('deferredGroupControls');
   const toggle   = document.getElementById('deferredSortToggle');
-  const reset    = document.getElementById('deferredSortReset');
   if (!controls) return;
 
   const canSortItems = visibleActive.length > 1;
@@ -1580,7 +1563,6 @@ function renderDeferredSortControls(visibleActive) {
   }
 
   if (toggle) toggle.textContent = isDeferredItemSorting ? '完成排序' : '排序';
-  if (reset) reset.style.display = hasCustomDeferredItemOrder(visibleActive) ? 'inline-flex' : 'none';
 }
 
 function hideDeferredGroupTabs() {
@@ -2432,15 +2414,6 @@ document.addEventListener('click', async (e) => {
       isDeferredItemSorting = true;
     }
     await renderDeferredColumn();
-    return;
-  }
-
-  // ---- Restore default saved-for-later item sorting ----
-  if (action === 'reset-deferred-group-sort') {
-    const confirmed = window.confirm('确认恢复稍后处理内容的默认排序吗？');
-    if (!confirmed) return;
-    await resetDeferredItemSort();
-    showToast('稍后处理已恢复默认排序');
     return;
   }
 
