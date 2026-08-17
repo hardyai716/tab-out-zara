@@ -29,6 +29,7 @@ let openTabs = [];
 const REALTIME_REFRESH_DEBOUNCE_MS = 250;
 const ACCESS_STATUS_REFRESH_MS = 60000;
 const DEFERRED_ALL_GROUP_ID = '__all__';
+const DEFAULT_DEFERRED_REMARK = '默认';
 const BOOKMARKS_PREVIEW_LIMIT = 10;
 const DEFAULT_MODULE_PREFS = {
   browserBookmarks: { visible: true, collapsed: true },
@@ -40,6 +41,8 @@ let bookmarkRefreshTimer = null;
 let dashboardRenderPromise = null;
 let dashboardRenderQueued = false;
 let selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
+let deferredRemarkFilters = new Map();
+let deferredRemarkDialogState = null;
 let isDeferredItemSorting = false;
 let deferredItemDragState = null;
 let quickLinkDragState = null;
@@ -241,6 +244,7 @@ async function closeTabOutDupes() {
        url: "https://example.com",
        title: "Example Page",
        savedAt: "2026-04-04T10:00:00.000Z",  // ISO date string
+       remark: "Q3 review",          // optional note/tag, defaults to "默认"
        sortIndex: 0,                 // optional custom order within same-domain group
        completed: false,             // true = checked off (archived)
        dismissed: false              // true = dismissed without reading
@@ -253,7 +257,7 @@ async function closeTabOutDupes() {
  * saveTabForLater(tab)
  *
  * Saves a single tab to the "Saved for Later" list in chrome.storage.local.
- * @param {{ url: string, title: string }} tab
+ * @param {{ url: string, title: string, remark?: string }} tab
  */
 async function saveTabForLater(tab) {
   const { deferred = [] } = await chrome.storage.local.get('deferred');
@@ -262,6 +266,7 @@ async function saveTabForLater(tab) {
     url:       tab.url,
     title:     tab.title,
     savedAt:   new Date().toISOString(),
+    remark:    normalizeDeferredRemark(tab.remark),
     completed: false,
     dismissed: false,
   });
@@ -311,6 +316,37 @@ async function dismissSavedTab(id) {
     tab.dismissed = true;
     await chrome.storage.local.set({ deferred });
   }
+}
+
+async function updateSavedTabRemark(id, remark) {
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+  const tab = deferred.find(t => t.id === id);
+  if (!tab) return null;
+
+  tab.remark = normalizeDeferredRemark(remark);
+  await chrome.storage.local.set({ deferred });
+  return tab;
+}
+
+async function renameDeferredRemarkGroup(groupId, oldRemark, newRemark) {
+  const normalizedOld = normalizeDeferredRemark(oldRemark);
+  const normalizedNew = normalizeDeferredRemark(newRemark);
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+  let updatedCount = 0;
+
+  for (const item of deferred) {
+    if (
+      !item.dismissed &&
+      getDeferredGroupId(item) === groupId &&
+      getDeferredRemark(item) === normalizedOld
+    ) {
+      item.remark = normalizedNew;
+      updatedCount += 1;
+    }
+  }
+
+  if (updatedCount > 0) await chrome.storage.local.set({ deferred });
+  return { remark: normalizedNew, updatedCount };
 }
 
 
@@ -1215,6 +1251,188 @@ function getDeferredGroupId(item) {
   }
 }
 
+function normalizeDeferredRemark(value) {
+  const trimmed = String(value || '').trim().replace(/\s+/g, ' ');
+  return trimmed || DEFAULT_DEFERRED_REMARK;
+}
+
+function getDeferredRemark(item) {
+  return normalizeDeferredRemark(item && item.remark);
+}
+
+function buildDeferredRemarkCounts(items) {
+  const counts = new Map();
+
+  for (const item of items) {
+    const remark = getDeferredRemark(item);
+    counts.set(remark, (counts.get(remark) || 0) + 1);
+  }
+
+  return [...counts.entries()].sort((a, b) => {
+    if (a[0] === DEFAULT_DEFERRED_REMARK) return -1;
+    if (b[0] === DEFAULT_DEFERRED_REMARK) return 1;
+    if (a[1] !== b[1]) return b[1] - a[1];
+    return a[0].localeCompare(b[0]);
+  });
+}
+
+async function getDeferredRemarkOptionsForUrl(url) {
+  const groupId = getDeferredGroupId({ url });
+  const { deferred = [] } = await chrome.storage.local.get('deferred');
+  const sameDomainActive = deferred.filter(item =>
+    !item.dismissed &&
+    !item.completed &&
+    getDeferredGroupId(item) === groupId
+  );
+
+  return buildDeferredRemarkCounts(sameDomainActive)
+    .map(([remark, count]) => ({ remark, count }));
+}
+
+function closeDeferredRemarkDialog(result) {
+  if (!deferredRemarkDialogState) return;
+
+  const { resolve, previousFocus } = deferredRemarkDialogState;
+  const backdrop = document.getElementById('deferredRemarkDialogBackdrop');
+  if (backdrop) backdrop.style.display = 'none';
+  deferredRemarkDialogState = null;
+  resolve(result);
+
+  if (previousFocus && typeof previousFocus.focus === 'function') {
+    try { previousFocus.focus(); } catch {}
+  }
+}
+
+function ensureDeferredRemarkDialog() {
+  let backdrop = document.getElementById('deferredRemarkDialogBackdrop');
+  if (backdrop) return backdrop;
+
+  backdrop = document.createElement('div');
+  backdrop.id = 'deferredRemarkDialogBackdrop';
+  backdrop.className = 'deferred-remark-dialog-backdrop';
+  backdrop.style.display = 'none';
+  backdrop.innerHTML = `
+    <div class="deferred-remark-dialog" role="dialog" aria-modal="true" aria-labelledby="deferredRemarkDialogTitle">
+      <div class="deferred-remark-dialog-header">
+        <div>
+          <h3 id="deferredRemarkDialogTitle">选择备注标签</h3>
+          <div class="deferred-remark-dialog-domain" id="deferredRemarkDialogDomain"></div>
+        </div>
+        <button class="deferred-remark-dialog-close" type="button" aria-label="关闭">×</button>
+      </div>
+      <div class="deferred-remark-dialog-empty" id="deferredRemarkDialogEmpty" style="display:none">
+        当前域名下还没有备注标签。
+      </div>
+      <div class="deferred-remark-choice-list" id="deferredRemarkChoiceList"></div>
+      <form class="deferred-remark-create" id="deferredRemarkCreateForm">
+        <input type="text" id="deferredRemarkCreateInput" placeholder="输入新备注，留空使用默认" autocomplete="off">
+        <button type="submit" class="action-btn primary">保存</button>
+      </form>
+    </div>`;
+
+  document.body.appendChild(backdrop);
+
+  const closeBtn = backdrop.querySelector('.deferred-remark-dialog-close');
+  const form = backdrop.querySelector('#deferredRemarkCreateForm');
+  const input = backdrop.querySelector('#deferredRemarkCreateInput');
+
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop || e.target === closeBtn) {
+      closeDeferredRemarkDialog(null);
+      return;
+    }
+
+    const choice = e.target.closest('.deferred-remark-choice');
+    if (!choice) return;
+
+    closeDeferredRemarkDialog(normalizeDeferredRemark(choice.dataset.remark));
+  });
+
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    closeDeferredRemarkDialog(normalizeDeferredRemark(input.value));
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape' || !deferredRemarkDialogState) return;
+    closeDeferredRemarkDialog(null);
+  });
+
+  return backdrop;
+}
+
+function renderDeferredRemarkChoices(backdrop, options, currentRemark = '') {
+  const list = backdrop.querySelector('#deferredRemarkChoiceList');
+  const empty = backdrop.querySelector('#deferredRemarkDialogEmpty');
+  if (!list || !empty) return;
+
+  const normalizedCurrent = currentRemark ? normalizeDeferredRemark(currentRemark) : '';
+  const hasDefault = options.some(option => option.remark === DEFAULT_DEFERRED_REMARK);
+  const choices = hasDefault
+    ? options
+    : [{ remark: DEFAULT_DEFERRED_REMARK, count: 0 }, ...options];
+
+  empty.style.display = options.length > 0 ? 'none' : 'block';
+  list.innerHTML = '';
+
+  for (const option of choices) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = `deferred-remark-choice${normalizedCurrent === option.remark ? ' active' : ''}`;
+    button.dataset.remark = option.remark;
+    button.setAttribute('aria-pressed', normalizedCurrent === option.remark ? 'true' : 'false');
+
+    const label = document.createElement('span');
+    label.className = 'deferred-remark-choice-label';
+    label.textContent = option.remark;
+    button.appendChild(label);
+
+    if (option.count > 0) {
+      const count = document.createElement('span');
+      count.className = 'deferred-remark-choice-count';
+      count.textContent = `${option.count}项`;
+      button.appendChild(count);
+    }
+
+    list.appendChild(button);
+  }
+}
+
+async function promptDeferredRemarkForUrl(url, currentRemark = '') {
+  const options = await getDeferredRemarkOptionsForUrl(url);
+  const backdrop = ensureDeferredRemarkDialog();
+  const domainEl = backdrop.querySelector('#deferredRemarkDialogDomain');
+  const input = backdrop.querySelector('#deferredRemarkCreateInput');
+  const previousFocus = document.activeElement;
+
+  if (domainEl) domainEl.textContent = getDeferredGroupId({ url });
+  if (input) input.value = '';
+  renderDeferredRemarkChoices(backdrop, options, currentRemark);
+  backdrop.style.display = 'flex';
+
+  const activeChoice = backdrop.querySelector('.deferred-remark-choice.active');
+  const firstChoice = backdrop.querySelector('.deferred-remark-choice');
+  if (activeChoice) activeChoice.focus();
+  else if (firstChoice) firstChoice.focus();
+
+  return new Promise(resolve => {
+    deferredRemarkDialogState = { resolve, previousFocus };
+  });
+}
+
+function getDeferredRemarkFilter(groupId, items) {
+  const selected = deferredRemarkFilters.get(groupId);
+  if (!selected) return '';
+
+  const hasRemark = items.some(item => getDeferredRemark(item) === selected);
+  if (!hasRemark) {
+    deferredRemarkFilters.delete(groupId);
+    return '';
+  }
+
+  return selected;
+}
+
 function buildDeferredGroups(activeItems) {
   const groupsById = new Map();
 
@@ -1307,18 +1525,57 @@ function hideDeferredGroupTabs() {
   tabsEl.innerHTML = '';
 }
 
+function renderDeferredRemarkFilters(group, selectedRemark, totalCount) {
+  const safeGroupId = escapeHtml(group.id);
+  const allActive = selectedRemark ? '' : ' active';
+  const remarkButtons = buildDeferredRemarkCounts(group.items).map(([remark, count]) => {
+    const safeRemark = escapeHtml(remark);
+    const active = selectedRemark === remark ? ' active' : '';
+
+    return `
+      <span class="deferred-remark-filter-wrap">
+        <button class="deferred-remark-filter${active}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="${safeRemark}">
+          <span class="deferred-remark-label">${safeRemark}</span>
+          <span class="deferred-remark-count">${count}</span>
+        </button>
+        <button class="deferred-remark-edit" data-action="rename-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="重命名：${safeRemark}" aria-label="重命名 ${safeRemark}">✎</button>
+      </span>`;
+  }).join('');
+
+  return `
+    <div class="deferred-remark-filters">
+      <button class="deferred-remark-filter is-all${allActive}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="" type="button">
+        <span class="deferred-remark-label">全部</span>
+        <span class="deferred-remark-count">${totalCount}</span>
+      </button>
+      ${remarkButtons}
+    </div>`;
+}
+
 function renderDeferredGroupCard(group) {
   const safeLabel = escapeHtml(group.label);
   const orderedItems = applyDeferredItemOrder(group.items);
+  const selectedRemark = getDeferredRemarkFilter(group.id, orderedItems);
+  const visibleItems = selectedRemark
+    ? orderedItems.filter(item => getDeferredRemark(item) === selectedRemark)
+    : orderedItems;
+  const countText = selectedRemark
+    ? `${visibleItems.length}/${orderedItems.length} 项`
+    : `${orderedItems.length} 项`;
 
   return `
     <article class="deferred-group-card">
       <div class="deferred-group-card-header">
         <h3 class="deferred-group-card-title" title="${safeLabel}">${safeLabel}</h3>
-        <span class="deferred-group-card-count">${orderedItems.length} 项</span>
+        <span class="deferred-group-card-count">${countText}</span>
       </div>
+      ${renderDeferredRemarkFilters(group, selectedRemark, orderedItems.length)}
       <div class="deferred-group-card-items">
-        ${orderedItems.map(item => renderDeferredItem(item, { showDomain: false })).join('')}
+        ${visibleItems.map(item => renderDeferredItem(item, {
+          showDomain: false,
+          groupId: group.id,
+          selectedRemark,
+        })).join('')}
       </div>
     </article>`;
 }
@@ -1399,13 +1656,19 @@ async function renderDeferredColumn() {
  * domain, time ago, dismiss button.
  */
 function renderDeferredItem(item, options = {}) {
-  const { showDomain = true } = options;
+  const { showDomain = true, groupId = getDeferredGroupId(item), selectedRemark = '' } = options;
   let domain = '';
   try { domain = new URL(item.url).hostname.replace(/^www\./, ''); } catch {}
   const ago = timeAgo(item.savedAt);
+  const remark = getDeferredRemark(item);
+  const safeGroupId = escapeHtml(groupId);
+  const safeRemark = escapeHtml(remark);
+  const safeId = escapeHtml(item.id);
+  const remarkActive = selectedRemark === remark ? ' active' : '';
   const metaParts = [
     showDomain && domain ? `<span>${domain}</span>` : '',
     `<span>${ago}</span>`,
+    `<button class="deferred-item-remark${remarkActive}" data-action="edit-deferred-remark" data-deferred-id="${safeId}" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="修改备注：${safeRemark}">${safeRemark}</button>`,
   ].filter(Boolean).join('');
   const sortClass = isDeferredItemSorting ? ' sorting' : '';
   const handle = isDeferredItemSorting
@@ -2124,6 +2387,90 @@ document.addEventListener('click', async (e) => {
     return;
   }
 
+  // ---- Filter saved-for-later items by remark within one domain group ----
+  if (action === 'filter-deferred-remark') {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const groupId = actionEl.dataset.deferredGroupId;
+    const remark = normalizeDeferredRemark(actionEl.dataset.deferredRemark);
+    if (!groupId) return;
+
+    if (!actionEl.dataset.deferredRemark) {
+      deferredRemarkFilters.delete(groupId);
+    } else {
+      deferredRemarkFilters.set(groupId, remark);
+    }
+
+    await renderDeferredColumn();
+    return;
+  }
+
+  // ---- Rename one remark group inside the current domain ----
+  if (action === 'rename-deferred-remark') {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const groupId = actionEl.dataset.deferredGroupId;
+    const oldRemark = normalizeDeferredRemark(actionEl.dataset.deferredRemark);
+    if (!groupId) return;
+
+    const input = window.prompt('更新组名', oldRemark);
+    if (input === null) return;
+
+    const newRemark = normalizeDeferredRemark(input);
+    if (newRemark === oldRemark) return;
+
+    const { remark, updatedCount } = await renameDeferredRemarkGroup(groupId, oldRemark, newRemark);
+    if (updatedCount === 0) {
+      showToast('没有可更新的待看内容');
+      return;
+    }
+
+    if (deferredRemarkFilters.get(groupId) === oldRemark) {
+      deferredRemarkFilters.set(groupId, remark);
+    }
+
+    showToast(`已更新组名 · ${remark}（${updatedCount}项）`);
+    await renderDeferredColumn();
+    return;
+  }
+
+  // ---- Reassign one saved-for-later item to another remark group ----
+  if (action === 'edit-deferred-remark') {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const id = actionEl.dataset.deferredId;
+    if (!id) return;
+
+    const { deferred = [] } = await chrome.storage.local.get('deferred');
+    const item = deferred.find(tab => tab.id === id && !tab.dismissed && !tab.completed);
+    if (!item) {
+      showToast('稍后处理不存在');
+      return;
+    }
+
+    const currentRemark = getDeferredRemark(item);
+    const remark = await promptDeferredRemarkForUrl(item.url, currentRemark);
+    if (remark === null) return;
+
+    const updated = await updateSavedTabRemark(id, remark);
+    if (!updated) {
+      showToast('稍后处理不存在');
+      return;
+    }
+
+    const groupId = getDeferredGroupId(updated);
+    if (deferredRemarkFilters.has(groupId)) {
+      deferredRemarkFilters.set(groupId, remark);
+    }
+
+    showToast(`已更新备注 · ${remark}`);
+    await renderDeferredColumn();
+    return;
+  }
+
   // ---- Close duplicate Tab Out tabs ----
   if (action === 'close-tabout-dupes') {
     await closeTabOutDupes();
@@ -2197,9 +2544,12 @@ document.addEventListener('click', async (e) => {
     const tabTitle = actionEl.dataset.tabTitle || tabUrl;
     if (!tabUrl) return;
 
+    const remark = await promptDeferredRemarkForUrl(tabUrl);
+    if (remark === null) return;
+
     // Save to chrome.storage.local
     try {
-      await saveTabForLater({ url: tabUrl, title: tabTitle });
+      await saveTabForLater({ url: tabUrl, title: tabTitle, remark });
     } catch (err) {
       console.error('[tab-out] Failed to save tab:', err);
       showToast('保存失败');
@@ -2221,7 +2571,7 @@ document.addEventListener('click', async (e) => {
       setTimeout(() => chip.remove(), 200);
     }
 
-    showToast('已保存到稍后处理');
+    showToast(`已保存到稍后处理 · ${remark}`);
     await renderDeferredColumn();
     return;
   }
