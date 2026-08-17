@@ -2,6 +2,11 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const {
+  escapeHtml,
+  installRealtimeTabRefresh,
+  mergeOrderedIds,
+} = require('../extension/核心逻辑.js');
 
 const DEBOUNCE_MS = 250;
 
@@ -60,49 +65,13 @@ function createFakeTimer() {
   };
 }
 
-function installRealtimeTabRefresh({
-  chromeTabs,
-  renderDashboard,
-  debounceMs = DEBOUNCE_MS,
-  setTimeoutFn,
-  clearTimeoutFn,
-}) {
-  let refreshTimer = null;
-
-  function scheduleRefresh(reason) {
-    if (refreshTimer !== null) clearTimeoutFn(refreshTimer);
-
-    refreshTimer = setTimeoutFn(() => {
-      refreshTimer = null;
-      renderDashboard(reason);
-    }, debounceMs);
-  }
-
-  chromeTabs.onCreated.addListener(() => {
-    scheduleRefresh('tab-created');
-  });
-
-  chromeTabs.onRemoved.addListener(() => {
-    scheduleRefresh('tab-removed');
-  });
-
-  chromeTabs.onUpdated.addListener((tabId, changeInfo) => {
-    const shouldRefresh =
-      Object.prototype.hasOwnProperty.call(changeInfo, 'url') ||
-      Object.prototype.hasOwnProperty.call(changeInfo, 'title') ||
-      Object.prototype.hasOwnProperty.call(changeInfo, 'status');
-
-    if (shouldRefresh) scheduleRefresh('tab-updated');
-  });
-}
-
 test('realtime tab refresh debounces created and updated events', () => {
   const chromeTabs = createFakeChromeTabs();
   const timer = createFakeTimer();
   const renderCalls = [];
 
   installRealtimeTabRefresh({
-    chromeTabs,
+    tabsApi: chromeTabs,
     renderDashboard(reason) {
       renderCalls.push(reason);
     },
@@ -144,7 +113,7 @@ test('realtime tab refresh ignores irrelevant updates and renders on remove', ()
   const renderCalls = [];
 
   installRealtimeTabRefresh({
-    chromeTabs,
+    tabsApi: chromeTabs,
     renderDashboard(reason) {
       renderCalls.push(reason);
     },
@@ -162,4 +131,20 @@ test('realtime tab refresh ignores irrelevant updates and renders on remove', ()
   chromeTabs.onRemoved.dispatch(101, { windowId: 1, isWindowClosing: false });
   timer.advance(DEBOUNCE_MS);
   assert.deepEqual(renderCalls, ['tab-removed']);
+});
+
+test('escapeHtml neutralizes markup and action attributes from tab titles', () => {
+  const maliciousTitle = '</span><button data-action="close-all-open-tabs">关闭</button>';
+
+  assert.equal(
+    escapeHtml(maliciousTitle),
+    '&lt;/span&gt;&lt;button data-action=&quot;close-all-open-tabs&quot;&gt;关闭&lt;/button&gt;'
+  );
+});
+
+test('mergeOrderedIds keeps filtered-out items with unique sort positions', () => {
+  const merged = mergeOrderedIds(['C', 'B'], ['A', 'B', 'C', 'D']);
+
+  assert.deepEqual(merged, ['C', 'B', 'A', 'D']);
+  assert.equal(new Set(merged).size, 4);
 });

@@ -59,6 +59,7 @@
     <pre id="output">Running...</pre>
   </div>
 
+  <script src="../extension/核心逻辑.js"></script>
   <script>
     'use strict';
 
@@ -119,42 +120,6 @@
       };
     }
 
-    function installRealtimeTabRefresh({
-      chromeTabs,
-      renderDashboard,
-      debounceMs = DEBOUNCE_MS,
-      setTimeoutFn = window.setTimeout,
-      clearTimeoutFn = window.clearTimeout,
-    }) {
-      let refreshTimer = null;
-
-      function scheduleRefresh(reason) {
-        if (refreshTimer !== null) clearTimeoutFn(refreshTimer);
-
-        refreshTimer = setTimeoutFn(() => {
-          refreshTimer = null;
-          renderDashboard(reason);
-        }, debounceMs);
-      }
-
-      chromeTabs.onCreated.addListener(() => {
-        scheduleRefresh('tab-created');
-      });
-
-      chromeTabs.onRemoved.addListener(() => {
-        scheduleRefresh('tab-removed');
-      });
-
-      chromeTabs.onUpdated.addListener((tabId, changeInfo) => {
-        const shouldRefresh =
-          Object.prototype.hasOwnProperty.call(changeInfo, 'url') ||
-          Object.prototype.hasOwnProperty.call(changeInfo, 'title') ||
-          Object.prototype.hasOwnProperty.call(changeInfo, 'status');
-
-        if (shouldRefresh) scheduleRefresh('tab-updated');
-      });
-    }
-
     function runHarness() {
       const lines = [];
       const renderCalls = [];
@@ -166,8 +131,8 @@
         lines.push(`PASS ${message}`);
       }
 
-      installRealtimeTabRefresh({
-        chromeTabs,
+      window.TabOutCore.installRealtimeTabRefresh({
+        tabsApi: chromeTabs,
         renderDashboard(reason) {
           renderCalls.push(reason);
         },

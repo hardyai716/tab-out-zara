@@ -15,6 +15,16 @@
 
 'use strict';
 
+if (!globalThis.TabOutCore) {
+  throw new Error('Tab Out 核心逻辑未加载');
+}
+
+const {
+  createLocalId,
+  escapeHtml,
+  installRealtimeTabRefresh: installCoreRealtimeTabRefresh,
+  mergeOrderedIds,
+} = globalThis.TabOutCore;
 
 /* ----------------------------------------------------------------
    CHROME TABS — Direct API Access
@@ -36,7 +46,6 @@ const DEFAULT_MODULE_PREFS = {
   quickLinks:       { visible: true, collapsed: false },
   deferred:         { visible: true, collapsed: false },
 };
-let realtimeRefreshTimer = null;
 let bookmarkRefreshTimer = null;
 let dashboardRenderPromise = null;
 let dashboardRenderQueued = false;
@@ -51,11 +60,40 @@ let quickLinkTitleManuallyEdited = false;
 let selectedBookmarkFolderId = null;
 let selectedBookmarkFolderTitle = '书签栏';
 let bookmarksExpanded = false;
+let storageMutationQueue = Promise.resolve();
 let modulePrefs = {
   browserBookmarks: { ...DEFAULT_MODULE_PREFS.browserBookmarks },
   quickLinks:       { ...DEFAULT_MODULE_PREFS.quickLinks },
   deferred:         { ...DEFAULT_MODULE_PREFS.deferred },
 };
+
+async function runStorageMutation(task) {
+  const execute = () => {
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.locks &&
+      typeof navigator.locks.request === 'function'
+    ) {
+      return navigator.locks.request('tab-out-storage-mutation', task);
+    }
+
+    return task();
+  };
+
+  const operation = storageMutationQueue.then(execute, execute);
+  storageMutationQueue = operation.catch(() => {});
+  return operation;
+}
+
+async function mutateStoredArray(key, mutator) {
+  return runStorageMutation(async () => {
+    const stored = await chrome.storage.local.get(key);
+    const items = Array.isArray(stored[key]) ? stored[key] : [];
+    const result = await mutator(items);
+    await chrome.storage.local.set({ [key]: items });
+    return result;
+  });
+}
 
 /**
  * fetchOpenTabs()
@@ -240,14 +278,13 @@ async function closeTabOutDupes() {
    Data shape stored under the "deferred" key:
    [
      {
-       id: "1712345678901",          // timestamp-based unique ID
+       id: "550e8400-e29b-41d4-a716-446655440000",
        url: "https://example.com",
        title: "Example Page",
        savedAt: "2026-04-04T10:00:00.000Z",  // ISO date string
        remark: "Q3 review",          // optional note/tag, defaults to "默认"
        sortIndex: 0,                 // optional custom order within same-domain group
-       completed: false,             // true = checked off (archived)
-       dismissed: false              // true = dismissed without reading
+       completed: false              // true = checked off (archived)
      },
      ...
    ]
@@ -260,17 +297,16 @@ async function closeTabOutDupes() {
  * @param {{ url: string, title: string, remark?: string }} tab
  */
 async function saveTabForLater(tab) {
-  const { deferred = [] } = await chrome.storage.local.get('deferred');
-  deferred.push({
-    id:        Date.now().toString(),
-    url:       tab.url,
-    title:     tab.title,
-    savedAt:   new Date().toISOString(),
-    remark:    normalizeDeferredRemark(tab.remark),
-    completed: false,
-    dismissed: false,
+  await mutateStoredArray('deferred', deferred => {
+    deferred.push({
+      id:        createLocalId(),
+      url:       tab.url,
+      title:     tab.title,
+      savedAt:   new Date().toISOString(),
+      remark:    normalizeDeferredRemark(tab.remark),
+      completed: false,
+    });
   });
-  await chrome.storage.local.set({ deferred });
 }
 
 /**
@@ -289,66 +325,82 @@ async function getSavedTabs() {
   };
 }
 
+async function purgeDismissedSavedTabs() {
+  return mutateStoredArray('deferred', deferred => {
+    let removedCount = 0;
+
+    for (let index = deferred.length - 1; index >= 0; index -= 1) {
+      if (!deferred[index].dismissed) continue;
+      deferred.splice(index, 1);
+      removedCount += 1;
+    }
+
+    return removedCount;
+  });
+}
+
 /**
  * checkOffSavedTab(id)
  *
  * Marks a saved tab as completed (checked off). It moves to the archive.
  */
 async function checkOffSavedTab(id) {
-  const { deferred = [] } = await chrome.storage.local.get('deferred');
-  const tab = deferred.find(t => t.id === id);
-  if (tab) {
+  return mutateStoredArray('deferred', deferred => {
+    const tab = deferred.find(t => t.id === id);
+    if (!tab) return false;
+
     tab.completed = true;
     tab.completedAt = new Date().toISOString();
-    await chrome.storage.local.set({ deferred });
-  }
+    return true;
+  });
 }
 
 /**
  * dismissSavedTab(id)
  *
- * Marks a saved tab as dismissed (removed from all lists).
+ * Permanently removes a saved tab.
  */
 async function dismissSavedTab(id) {
-  const { deferred = [] } = await chrome.storage.local.get('deferred');
-  const tab = deferred.find(t => t.id === id);
-  if (tab) {
-    tab.dismissed = true;
-    await chrome.storage.local.set({ deferred });
-  }
+  return mutateStoredArray('deferred', deferred => {
+    const index = deferred.findIndex(t => t.id === id);
+    if (index === -1) return false;
+
+    deferred.splice(index, 1);
+    return true;
+  });
 }
 
 async function updateSavedTabRemark(id, remark) {
-  const { deferred = [] } = await chrome.storage.local.get('deferred');
-  const tab = deferred.find(t => t.id === id);
-  if (!tab) return null;
+  return mutateStoredArray('deferred', deferred => {
+    const tab = deferred.find(t => t.id === id);
+    if (!tab) return null;
 
-  tab.remark = normalizeDeferredRemark(remark);
-  await chrome.storage.local.set({ deferred });
-  return tab;
+    tab.remark = normalizeDeferredRemark(remark);
+    return { ...tab };
+  });
 }
 
 async function renameDeferredRemarkGroup(groupId, oldRemark, newRemark) {
   const normalizedOld = normalizeDeferredRemark(oldRemark);
   const normalizedNew = normalizeDeferredRemark(newRemark);
-  const { deferred = [] } = await chrome.storage.local.get('deferred');
-  let updatedCount = 0;
 
-  for (const item of deferred) {
-    if (
-      !item.dismissed &&
-      getDeferredGroupId(item) === groupId &&
-      getDeferredRemark(item) === normalizedOld
-    ) {
-      item.remark = normalizedNew;
-      updatedCount += 1;
+  return mutateStoredArray('deferred', deferred => {
+    let updatedCount = 0;
+
+    for (const item of deferred) {
+      if (
+        !item.dismissed &&
+        getDeferredGroupId(item) === groupId &&
+        getDeferredRemark(item) === normalizedOld
+      ) {
+        item.remark = normalizedNew;
+        updatedCount += 1;
+      }
     }
-  }
 
-  if (updatedCount > 0) await chrome.storage.local.set({ deferred });
-  return { remark: normalizedNew, updatedCount };
+    return { remark: normalizedNew, updatedCount };
+  });
 }
-
 
 /* ----------------------------------------------------------------
    QUICK LINKS — chrome.storage.local
@@ -359,15 +411,6 @@ async function renameDeferredRemarkGroup(groupId, oldRemark, newRemark) {
      { id, title, url, createdAt }
    ]
    ---------------------------------------------------------------- */
-
-function escapeHtml(value) {
-  return String(value || '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 function getFaviconUrl(pageUrl, size = 16) {
   if (
@@ -389,11 +432,11 @@ function getFaviconUrl(pageUrl, size = 16) {
   }
 }
 
-function renderFavicon(pageUrl, className, size = 16, extraAttrs = '') {
+function renderFavicon(pageUrl, className, size = 16) {
   const faviconUrl = getFaviconUrl(pageUrl, size);
   if (!faviconUrl) return '';
 
-  return `<img class="${className}" src="${escapeHtml(faviconUrl)}" alt="" ${extraAttrs} onerror="this.style.display='none'">`;
+  return `<img class="${escapeHtml(className)}" src="${escapeHtml(faviconUrl)}" alt="" data-favicon>`;
 }
 
 function normalizeModulePrefs(rawPrefs = {}) {
@@ -415,8 +458,15 @@ async function loadModulePrefs() {
   }
 }
 
-async function saveModulePrefs() {
-  await chrome.storage.local.set({ dashboardModulePrefs: modulePrefs });
+async function saveModulePrefs(moduleId) {
+  if (!modulePrefs[moduleId]) return;
+
+  await runStorageMutation(async () => {
+    const { dashboardModulePrefs = {} } = await chrome.storage.local.get('dashboardModulePrefs');
+    const nextPrefs = normalizeModulePrefs(dashboardModulePrefs);
+    nextPrefs[moduleId] = { ...modulePrefs[moduleId] };
+    await chrome.storage.local.set({ dashboardModulePrefs: nextPrefs });
+  });
 }
 
 function applyModuleState(moduleId) {
@@ -529,18 +579,17 @@ async function addQuickLink({ title, url }) {
   const cleanTitle = String(title || '').trim() || await inferQuickLinkTitle(normalizedUrl);
   if (!cleanTitle) throw new Error('请输入名称');
 
-  const quickLinks = await getQuickLinks();
-  const alreadyExists = quickLinks.some(link => link.url === normalizedUrl);
-  if (alreadyExists) throw new Error('这个网址已经在常用导航里了');
+  await mutateStoredArray('quickLinks', quickLinks => {
+    const alreadyExists = quickLinks.some(link => link.url === normalizedUrl);
+    if (alreadyExists) throw new Error('这个网址已经在常用导航里了');
 
-  quickLinks.push({
-    id:        Date.now().toString(),
-    title:     cleanTitle,
-    url:       normalizedUrl,
-    createdAt: new Date().toISOString(),
+    quickLinks.push({
+      id:        createLocalId(),
+      title:     cleanTitle,
+      url:       normalizedUrl,
+      createdAt: new Date().toISOString(),
+    });
   });
-
-  await chrome.storage.local.set({ quickLinks });
 }
 
 async function updateQuickLink(id, { title, url }) {
@@ -548,37 +597,36 @@ async function updateQuickLink(id, { title, url }) {
   const cleanTitle = String(title || '').trim() || await inferQuickLinkTitle(normalizedUrl);
   if (!cleanTitle) throw new Error('请输入名称');
 
-  const quickLinks = await getQuickLinks();
-  const target = quickLinks.find(link => link.id === id);
-  if (!target) throw new Error('快捷入口不存在');
+  await mutateStoredArray('quickLinks', quickLinks => {
+    const target = quickLinks.find(link => link.id === id);
+    if (!target) throw new Error('快捷入口不存在');
 
-  const alreadyExists = quickLinks.some(link => link.id !== id && link.url === normalizedUrl);
-  if (alreadyExists) throw new Error('这个网址已经在常用导航里了');
+    const alreadyExists = quickLinks.some(link => link.id !== id && link.url === normalizedUrl);
+    if (alreadyExists) throw new Error('这个网址已经在常用导航里了');
 
-  target.title = cleanTitle;
-  target.url = normalizedUrl;
-  target.updatedAt = new Date().toISOString();
-
-  await chrome.storage.local.set({ quickLinks });
+    target.title = cleanTitle;
+    target.url = normalizedUrl;
+    target.updatedAt = new Date().toISOString();
+  });
 }
 
 async function removeQuickLink(id) {
-  const quickLinks = await getQuickLinks();
-  await chrome.storage.local.set({
-    quickLinks: quickLinks.filter(link => link.id !== id),
+  await mutateStoredArray('quickLinks', quickLinks => {
+    const index = quickLinks.findIndex(link => link.id === id);
+    if (index !== -1) quickLinks.splice(index, 1);
   });
 }
 
 async function saveQuickLinkOrderFromDom() {
   const cards = [...document.querySelectorAll('.quick-link-card')];
   const orderedIds = cards.map(card => card.dataset.quickLinkId).filter(Boolean);
-  const quickLinks = await getQuickLinks();
-  const linksById = new Map(quickLinks.map(link => [link.id, link]));
-  const orderedLinks = orderedIds.map(id => linksById.get(id)).filter(Boolean);
-  const missingLinks = quickLinks.filter(link => !orderedIds.includes(link.id));
 
-  await chrome.storage.local.set({
-    quickLinks: [...orderedLinks, ...missingLinks],
+  await mutateStoredArray('quickLinks', quickLinks => {
+    const linksById = new Map(quickLinks.map(link => [link.id, link]));
+    const orderedLinks = orderedIds.map(id => linksById.get(id)).filter(Boolean);
+    const orderedIdSet = new Set(orderedIds);
+    const missingLinks = quickLinks.filter(link => !orderedIdSet.has(link.id));
+    quickLinks.splice(0, quickLinks.length, ...orderedLinks, ...missingLinks);
   });
 }
 
@@ -1134,7 +1182,9 @@ function renderDomainCard(group) {
   const tabs      = group.tabs || [];
   const tabCount  = tabs.length;
   const isLanding = group.domain === '__landing-pages__';
-  const stableId  = 'domain-' + group.domain.replace(/[^a-z0-9]/g, '-');
+  const safeDomainKey = escapeHtml(group.domain);
+  const groupName = isLanding ? '常用首页' : (group.label || friendlyDomain(group.domain));
+  const safeGroupName = escapeHtml(groupName);
 
   // Count duplicates (exact URL match)
   const urlCounts = {};
@@ -1173,13 +1223,13 @@ function renderDomainCard(group) {
     const count    = urlCounts[tab.url];
     const dupeTag  = count > 1 ? ` <span class="chip-dupe-badge">(${count}x)</span>` : '';
     const chipClass = count > 1 ? ' chip-has-dupes' : '';
-    const safeUrl   = (tab.url || '').replace(/"/g, '&quot;');
-    const safeTitle = label.replace(/"/g, '&quot;');
+    const safeUrl   = escapeHtml(tab.url || '');
+    const safeTitle = escapeHtml(label);
     const accessMeta = renderTabAccessMeta(tab.lastAccessed);
     return `<div class="page-chip clickable${chipClass}" data-action="focus-tab" data-tab-url="${safeUrl}" title="${safeTitle}">
       ${renderFavicon(tab.url, 'chip-favicon', 16)}
       <span class="chip-content">
-        <span class="chip-text">${label}</span>
+        <span class="chip-text">${safeTitle}</span>
         ${accessMeta}
       </span>${dupeTag}
       <div class="chip-actions">
@@ -1201,7 +1251,7 @@ function renderDomainCard(group) {
   let actionsHtml = '';
 
   if (hasDupes) {
-    const dupeUrlsEncoded = dupeUrls.map(([url]) => encodeURIComponent(url)).join(',');
+    const dupeUrlsEncoded = escapeHtml(dupeUrls.map(([url]) => encodeURIComponent(url)).join(','));
     actionsHtml += `
       <button class="action-btn" data-action="dedup-keep-one" data-dupe-urls="${dupeUrlsEncoded}">
         关闭 ${totalExtras} 个重复标签页
@@ -1211,18 +1261,18 @@ function renderDomainCard(group) {
   const dangerHtml = `
     <div class="domain-danger-zone">
       <span class="domain-danger-hint">危险操作</span>
-      <button class="action-btn close-tabs domain-close-all" data-action="close-domain-tabs" data-domain-id="${stableId}">
+      <button class="action-btn close-tabs domain-close-all" data-action="close-domain-tabs" data-domain-key="${safeDomainKey}">
         ${ICONS.close}
         关闭该分组全部 ${tabCount} 个标签页
       </button>
     </div>`;
 
   return `
-    <div class="mission-card domain-card ${hasDupes ? 'has-amber-bar' : 'has-neutral-bar'}" data-domain-id="${stableId}">
+    <div class="mission-card domain-card ${hasDupes ? 'has-amber-bar' : 'has-neutral-bar'}" data-domain-key="${safeDomainKey}">
       <div class="status-bar"></div>
       <div class="mission-content">
         <div class="mission-top">
-          <span class="mission-name">${isLanding ? '常用首页' : (group.label || friendlyDomain(group.domain))}</span>
+          <span class="mission-name">${safeGroupName}</span>
           ${tabBadge}
           ${dupeBadge}
         </div>
@@ -1474,29 +1524,45 @@ function hasCustomDeferredItemOrder(items) {
 }
 
 async function saveDeferredItemOrderFromDom() {
-  const rows = [...document.querySelectorAll('.deferred-item')];
-  const orderedIds = rows.map(row => row.dataset.deferredId).filter(Boolean);
-  const orderById = new Map(orderedIds.map((id, index) => [id, index]));
-  const { deferred = [] } = await chrome.storage.local.get('deferred');
+  const orderByGroup = new Map();
+  const groupContainers = [...document.querySelectorAll('.deferred-group-card-items')];
 
-  for (const item of deferred) {
-    if (orderById.has(item.id)) item.sortIndex = orderById.get(item.id);
+  for (const container of groupContainers) {
+    const groupId = container.dataset.deferredGroupId;
+    if (!groupId) continue;
+
+    const orderedIds = [...container.querySelectorAll('.deferred-item')]
+      .map(row => row.dataset.deferredId)
+      .filter(Boolean);
+    orderByGroup.set(groupId, orderedIds);
   }
 
-  await chrome.storage.local.set({ deferred });
+  await mutateStoredArray('deferred', deferred => {
+    for (const [groupId, renderedIds] of orderByGroup) {
+      const groupItems = applyDeferredItemOrder(deferred.filter(item =>
+        !item.dismissed &&
+        !item.completed &&
+        getDeferredGroupId(item) === groupId
+      ));
+      const completeOrder = mergeOrderedIds(renderedIds, groupItems.map(item => item.id));
+      const orderById = new Map(completeOrder.map((id, index) => [id, index]));
+
+      for (const item of groupItems) {
+        item.sortIndex = orderById.get(item.id);
+      }
+    }
+  });
 }
 
-async function resetDeferredItemSort(groupId) {
-  if (!groupId || groupId === DEFERRED_ALL_GROUP_ID) return;
-
+async function resetDeferredItemSort(groupId = DEFERRED_ALL_GROUP_ID) {
   isDeferredItemSorting = false;
-  const { deferred = [] } = await chrome.storage.local.get('deferred');
-
-  for (const item of deferred) {
-    if (getDeferredGroupId(item) === groupId) delete item.sortIndex;
-  }
-
-  await chrome.storage.local.set({ deferred });
+  await mutateStoredArray('deferred', deferred => {
+    for (const item of deferred) {
+      if (groupId === DEFERRED_ALL_GROUP_ID || getDeferredGroupId(item) === groupId) {
+        delete item.sortIndex;
+      }
+    }
+  });
   await renderDeferredColumn();
 }
 
@@ -1506,14 +1572,14 @@ function renderDeferredSortControls(visibleActive) {
   const reset    = document.getElementById('deferredSortReset');
   if (!controls) return;
 
-  const canSortItems = selectedDeferredGroupId !== DEFERRED_ALL_GROUP_ID && visibleActive.length > 1;
+  const canSortItems = visibleActive.length > 1;
   controls.style.display = canSortItems ? 'flex' : 'none';
   if (!canSortItems) {
     isDeferredItemSorting = false;
     return;
   }
 
-  if (toggle) toggle.textContent = isDeferredItemSorting ? '完成排序' : '调整优先级';
+  if (toggle) toggle.textContent = isDeferredItemSorting ? '完成排序' : '排序';
   if (reset) reset.style.display = hasCustomDeferredItemOrder(visibleActive) ? 'inline-flex' : 'none';
 }
 
@@ -1528,23 +1594,24 @@ function hideDeferredGroupTabs() {
 function renderDeferredRemarkFilters(group, selectedRemark, totalCount) {
   const safeGroupId = escapeHtml(group.id);
   const allActive = selectedRemark ? '' : ' active';
+  const disabled = isDeferredItemSorting ? ' disabled aria-disabled="true"' : '';
   const remarkButtons = buildDeferredRemarkCounts(group.items).map(([remark, count]) => {
     const safeRemark = escapeHtml(remark);
     const active = selectedRemark === remark ? ' active' : '';
 
     return `
       <span class="deferred-remark-filter-wrap">
-        <button class="deferred-remark-filter${active}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="${safeRemark}">
+        <button class="deferred-remark-filter${active}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="${safeRemark}"${disabled}>
           <span class="deferred-remark-label">${safeRemark}</span>
           <span class="deferred-remark-count">${count}</span>
         </button>
-        <button class="deferred-remark-edit" data-action="rename-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="重命名：${safeRemark}" aria-label="重命名 ${safeRemark}">✎</button>
+        <button class="deferred-remark-edit" data-action="rename-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="重命名：${safeRemark}" aria-label="重命名 ${safeRemark}"${disabled}>✎</button>
       </span>`;
   }).join('');
 
   return `
     <div class="deferred-remark-filters">
-      <button class="deferred-remark-filter is-all${allActive}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="" type="button">
+      <button class="deferred-remark-filter is-all${allActive}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="" type="button"${disabled}>
         <span class="deferred-remark-label">全部</span>
         <span class="deferred-remark-count">${totalCount}</span>
       </button>
@@ -1570,7 +1637,7 @@ function renderDeferredGroupCard(group) {
         <span class="deferred-group-card-count">${countText}</span>
       </div>
       ${renderDeferredRemarkFilters(group, selectedRemark, orderedItems.length)}
-      <div class="deferred-group-card-items">
+      <div class="deferred-group-card-items" data-deferred-group-id="${escapeHtml(group.id)}">
         ${visibleItems.map(item => renderDeferredItem(item, {
           showDomain: false,
           groupId: group.id,
@@ -1614,9 +1681,8 @@ async function renderDeferredColumn() {
 
     const groups = buildDeferredGroups(active);
     selectedDeferredGroupId = DEFERRED_ALL_GROUP_ID;
-    isDeferredItemSorting = false;
     hideDeferredGroupTabs();
-    renderDeferredSortControls([]);
+    renderDeferredSortControls(active);
 
     // Render active items as domain groups; CSS lays each group's items out in columns.
     if (active.length > 0) {
@@ -1664,32 +1730,45 @@ function renderDeferredItem(item, options = {}) {
   const safeGroupId = escapeHtml(groupId);
   const safeRemark = escapeHtml(remark);
   const safeId = escapeHtml(item.id);
+  const safeDomain = escapeHtml(domain);
+  const safeAgo = escapeHtml(ago);
+  const safeUrl = escapeHtml(item.url || '');
+  const safeTitle = escapeHtml(item.title || item.url);
   const remarkActive = selectedRemark === remark ? ' active' : '';
+  const remarkHtml = isDeferredItemSorting
+    ? `<span class="deferred-item-remark is-static${remarkActive}">${safeRemark}</span>`
+    : `<button class="deferred-item-remark${remarkActive}" data-action="edit-deferred-remark" data-deferred-id="${safeId}" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="修改备注：${safeRemark}">${safeRemark}</button>`;
   const metaParts = [
-    showDomain && domain ? `<span>${domain}</span>` : '',
-    `<span>${ago}</span>`,
-    `<button class="deferred-item-remark${remarkActive}" data-action="edit-deferred-remark" data-deferred-id="${safeId}" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="修改备注：${safeRemark}">${safeRemark}</button>`,
+    showDomain && domain ? `<span>${safeDomain}</span>` : '',
+    `<span>${safeAgo}</span>`,
+    remarkHtml,
   ].filter(Boolean).join('');
   const sortClass = isDeferredItemSorting ? ' sorting' : '';
   const handle = isDeferredItemSorting
     ? '<button class="deferred-item-drag" type="button" title="拖拽调整优先级" aria-label="拖拽调整优先级">☰</button>'
     : '';
+  const titleHtml = isDeferredItemSorting
+    ? `<span class="deferred-title is-static" title="${safeTitle}">${renderFavicon(item.url, 'deferred-favicon', 16)}${safeTitle}</span>`
+    : `<a href="${safeUrl}" target="_blank" rel="noopener" class="deferred-title" title="${safeTitle}">${renderFavicon(item.url, 'deferred-favicon', 16)}${safeTitle}</a>`;
+  const dismissHtml = isDeferredItemSorting
+    ? `<button class="deferred-dismiss" type="button" title="排序时不可移除" disabled>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+      </button>`
+    : `<button class="deferred-dismiss" data-action="dismiss-deferred" data-deferred-id="${safeId}" title="移除">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
+      </button>`;
 
   return `
-    <div class="deferred-item${sortClass}" data-deferred-id="${item.id}">
+    <div class="deferred-item${sortClass}" data-deferred-id="${safeId}">
       ${handle}
-      <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${item.id}" ${isDeferredItemSorting ? 'disabled' : ''}>
+      <input type="checkbox" class="deferred-checkbox" data-action="check-deferred" data-deferred-id="${safeId}" ${isDeferredItemSorting ? 'disabled' : ''}>
       <div class="deferred-info">
-        <a href="${item.url}" target="_blank" rel="noopener" class="deferred-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
-          ${renderFavicon(item.url, 'deferred-favicon', 16)}${item.title || item.url}
-        </a>
+        ${titleHtml}
         <div class="deferred-meta">
           ${metaParts}
         </div>
       </div>
-      <button class="deferred-dismiss" data-action="dismiss-deferred" data-deferred-id="${item.id}" title="移除">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18 18 6M6 6l12 12" /></svg>
-      </button>
+      ${dismissHtml}
     </div>`;
 }
 
@@ -1700,12 +1779,14 @@ function renderDeferredItem(item, options = {}) {
  */
 function renderArchiveItem(item) {
   const ago = item.completedAt ? timeAgo(item.completedAt) : timeAgo(item.savedAt);
+  const safeUrl = escapeHtml(item.url || '');
+  const safeTitle = escapeHtml(item.title || item.url);
   return `
     <div class="archive-item">
-      <a href="${item.url}" target="_blank" rel="noopener" class="archive-item-title" title="${(item.title || '').replace(/"/g, '&quot;')}">
-        ${item.title || item.url}
+      <a href="${safeUrl}" target="_blank" rel="noopener" class="archive-item-title" title="${safeTitle}">
+        ${safeTitle}
       </a>
-      <span class="archive-item-date">${ago}</span>
+      <span class="archive-item-date">${escapeHtml(ago)}</span>
     </div>`;
 }
 
@@ -1986,6 +2067,7 @@ async function renderStaticDashboard() {
   // --- Group tabs by domain ---
   // Landing pages (Gmail inbox, Twitter home, etc.) get their own special group
   // so they can be closed together without affecting content tabs on the same domain.
+  const localConfig = globalThis.TAB_OUT_CONFIG || {};
   const LANDING_PAGE_PATTERNS = [
     { hostname: 'mail.google.com', test: (p, h) =>
         !h.includes('#inbox/') && !h.includes('#sent/') && !h.includes('#search/') },
@@ -1993,8 +2075,7 @@ async function renderStaticDashboard() {
     { hostname: 'www.linkedin.com',    pathExact: ['/'] },
     { hostname: 'github.com',          pathExact: ['/'] },
     { hostname: 'www.youtube.com',     pathExact: ['/'] },
-    // Merge personal patterns from config.local.js (if it exists)
-    ...(typeof LOCAL_LANDING_PAGE_PATTERNS !== 'undefined' ? LOCAL_LANDING_PAGE_PATTERNS : []),
+    ...(Array.isArray(localConfig.landingPagePatterns) ? localConfig.landingPagePatterns : []),
   ];
 
   function isLandingPage(url) {
@@ -2017,11 +2098,10 @@ async function renderStaticDashboard() {
   }
 
   domainGroups = [];
-  const groupMap    = {};
+  const groupMap    = new Map();
   const landingTabs = [];
 
-  // Custom group rules from config.local.js (if any)
-  const customGroups = typeof LOCAL_CUSTOM_GROUPS !== 'undefined' ? LOCAL_CUSTOM_GROUPS : [];
+  const customGroups = Array.isArray(localConfig.customGroups) ? localConfig.customGroups : [];
 
   // Check if a URL matches a custom group rule; returns the rule or null
   function matchCustomGroup(url) {
@@ -2051,8 +2131,10 @@ async function renderStaticDashboard() {
       const customRule = matchCustomGroup(tab.url);
       if (customRule) {
         const key = customRule.groupKey;
-        if (!groupMap[key]) groupMap[key] = { domain: key, label: customRule.groupLabel, tabs: [] };
-        groupMap[key].tabs.push(tab);
+        if (!groupMap.has(key)) {
+          groupMap.set(key, { domain: key, label: customRule.groupLabel, tabs: [] });
+        }
+        groupMap.get(key).tabs.push(tab);
         continue;
       }
 
@@ -2064,15 +2146,15 @@ async function renderStaticDashboard() {
       }
       if (!hostname) continue;
 
-      if (!groupMap[hostname]) groupMap[hostname] = { domain: hostname, tabs: [] };
-      groupMap[hostname].tabs.push(tab);
+      if (!groupMap.has(hostname)) groupMap.set(hostname, { domain: hostname, tabs: [] });
+      groupMap.get(hostname).tabs.push(tab);
     } catch {
       // Skip malformed URLs
     }
   }
 
   if (landingTabs.length > 0) {
-    groupMap['__landing-pages__'] = { domain: '__landing-pages__', tabs: landingTabs };
+    groupMap.set('__landing-pages__', { domain: '__landing-pages__', tabs: landingTabs });
   }
 
   // Sort: landing pages first, then domains from landing page sites, then by tab count
@@ -2083,7 +2165,7 @@ async function renderStaticDashboard() {
     if (landingHostnames.has(domain)) return true;
     return landingSuffixes.some(s => domain.endsWith(s));
   }
-  domainGroups = Object.values(groupMap).sort((a, b) => {
+  domainGroups = [...groupMap.values()].sort((a, b) => {
     const aIsLanding = a.domain === '__landing-pages__';
     const bIsLanding = b.domain === '__landing-pages__';
     if (aIsLanding !== bIsLanding) return aIsLanding ? -1 : 1;
@@ -2112,7 +2194,7 @@ async function renderStaticDashboard() {
 
   // --- Footer stats ---
   const statTabs = document.getElementById('statTabs');
-  if (statTabs) statTabs.textContent = openTabs.length;
+  if (statTabs) statTabs.textContent = realTabs.length;
 
   // --- Check for duplicate Tab Out tabs ---
   checkTabOutDupes();
@@ -2146,43 +2228,14 @@ async function renderDashboard() {
    while this Tab Out page is already open.
    ---------------------------------------------------------------- */
 
-function scheduleRealtimeRefresh() {
-  if (realtimeRefreshTimer !== null) clearTimeout(realtimeRefreshTimer);
-
-  realtimeRefreshTimer = setTimeout(() => {
-    realtimeRefreshTimer = null;
-    renderDashboard().catch(err => {
-      console.warn('[tab-out] Realtime refresh failed:', err);
-    });
-  }, REALTIME_REFRESH_DEBOUNCE_MS);
-}
-
 function installRealtimeTabRefresh() {
-  if (
-    typeof chrome === 'undefined' ||
-    !chrome.tabs ||
-    !chrome.tabs.onCreated ||
-    !chrome.tabs.onUpdated ||
-    !chrome.tabs.onRemoved
-  ) {
-    return;
-  }
-
-  chrome.tabs.onCreated.addListener(() => {
-    scheduleRealtimeRefresh();
-  });
-
-  chrome.tabs.onRemoved.addListener(() => {
-    scheduleRealtimeRefresh();
-  });
-
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
-    const shouldRefresh =
-      Object.prototype.hasOwnProperty.call(changeInfo, 'url') ||
-      Object.prototype.hasOwnProperty.call(changeInfo, 'title') ||
-      Object.prototype.hasOwnProperty.call(changeInfo, 'status');
-
-    if (shouldRefresh) scheduleRealtimeRefresh();
+  installCoreRealtimeTabRefresh({
+    tabsApi: typeof chrome === 'undefined' ? null : chrome.tabs,
+    renderDashboard,
+    debounceMs: REALTIME_REFRESH_DEBOUNCE_MS,
+    onError(err) {
+      console.warn('[tab-out] Realtime refresh failed:', err);
+    },
   });
 }
 
@@ -2236,6 +2289,13 @@ function installAccessStatusRefresh() {
    instead of one per door.
    ---------------------------------------------------------------- */
 
+document.addEventListener('error', (e) => {
+  const image = e.target;
+  if (image && typeof image.matches === 'function' && image.matches('img[data-favicon]')) {
+    image.hidden = true;
+  }
+}, true);
+
 document.addEventListener('click', async (e) => {
   // Walk up the DOM to find the nearest element with data-action
   const actionEl = e.target.closest('[data-action]');
@@ -2250,7 +2310,7 @@ document.addEventListener('click', async (e) => {
 
     modulePrefs[moduleId].collapsed = !modulePrefs[moduleId].collapsed;
     applyModuleState(moduleId);
-    await saveModulePrefs();
+    await saveModulePrefs(moduleId);
     return;
   }
 
@@ -2260,7 +2320,7 @@ document.addEventListener('click', async (e) => {
 
     modulePrefs[moduleId].visible = false;
     applyModuleState(moduleId);
-    await saveModulePrefs();
+    await saveModulePrefs(moduleId);
     return;
   }
 
@@ -2271,7 +2331,7 @@ document.addEventListener('click', async (e) => {
     modulePrefs[moduleId].visible = true;
     modulePrefs[moduleId].collapsed = false;
     applyModuleState(moduleId);
-    await saveModulePrefs();
+    await saveModulePrefs(moduleId);
     if (moduleId === 'browserBookmarks') await renderBrowserBookmarks();
     if (moduleId === 'quickLinks') await renderQuickLinks();
     if (moduleId === 'deferred') await renderDeferredColumn();
@@ -2363,13 +2423,12 @@ document.addEventListener('click', async (e) => {
 
   // ---- Toggle saved-for-later item sorting mode ----
   if (action === 'toggle-deferred-group-sort') {
-    if (selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID) return;
-
     if (isDeferredItemSorting) {
       await saveDeferredItemOrderFromDom();
       isDeferredItemSorting = false;
-      showToast('优先级顺序已保存');
+      showToast('稍后处理排序已保存');
     } else {
+      deferredRemarkFilters.clear();
       isDeferredItemSorting = true;
     }
     await renderDeferredColumn();
@@ -2378,12 +2437,10 @@ document.addEventListener('click', async (e) => {
 
   // ---- Restore default saved-for-later item sorting ----
   if (action === 'reset-deferred-group-sort') {
-    if (selectedDeferredGroupId === DEFERRED_ALL_GROUP_ID) return;
-
-    const confirmed = window.confirm('确认恢复当前分组内网页的默认排序吗？');
+    const confirmed = window.confirm('确认恢复稍后处理内容的默认排序吗？');
     if (!confirmed) return;
-    await resetDeferredItemSort(selectedDeferredGroupId);
-    showToast('已恢复默认排序');
+    await resetDeferredItemSort();
+    showToast('稍后处理已恢复默认排序');
     return;
   }
 
@@ -2391,6 +2448,7 @@ document.addEventListener('click', async (e) => {
   if (action === 'filter-deferred-remark') {
     e.preventDefault();
     e.stopPropagation();
+    if (isDeferredItemSorting) return;
 
     const groupId = actionEl.dataset.deferredGroupId;
     const remark = normalizeDeferredRemark(actionEl.dataset.deferredRemark);
@@ -2410,6 +2468,7 @@ document.addEventListener('click', async (e) => {
   if (action === 'rename-deferred-remark') {
     e.preventDefault();
     e.stopPropagation();
+    if (isDeferredItemSorting) return;
 
     const groupId = actionEl.dataset.deferredGroupId;
     const oldRemark = normalizeDeferredRemark(actionEl.dataset.deferredRemark);
@@ -2473,6 +2532,10 @@ document.addEventListener('click', async (e) => {
 
   // ---- Close duplicate Tab Out tabs ----
   if (action === 'close-tabout-dupes') {
+    const duplicateCount = Math.max(0, openTabs.filter(tab => tab.isTabOut).length - 1);
+    const confirmed = window.confirm(`确认关闭其他 ${duplicateCount} 个 Tab Out 页面吗？`);
+    if (!confirmed) return;
+
     await closeTabOutDupes();
     playCloseSound();
     const banner = document.getElementById('tabOutDupeBanner');
@@ -2531,7 +2594,7 @@ document.addEventListener('click', async (e) => {
 
     // Update footer
     const statTabs = document.getElementById('statTabs');
-    if (statTabs) statTabs.textContent = openTabs.length;
+    if (statTabs) statTabs.textContent = getRealTabs().length;
 
     showToast('标签页已关闭');
     return;
@@ -2603,6 +2666,9 @@ document.addEventListener('click', async (e) => {
     const id = actionEl.dataset.deferredId;
     if (!id) return;
 
+    const confirmed = window.confirm('确认从稍后处理中永久移除此网页吗？');
+    if (!confirmed) return;
+
     await dismissSavedTab(id);
 
     const item = actionEl.closest('.deferred-item');
@@ -2618,10 +2684,8 @@ document.addEventListener('click', async (e) => {
 
   // ---- Close all tabs in a domain group ----
   if (action === 'close-domain-tabs') {
-    const domainId = actionEl.dataset.domainId;
-    const group    = domainGroups.find(g => {
-      return 'domain-' + g.domain.replace(/[^a-z0-9]/g, '-') === domainId;
-    });
+    const domainKey = actionEl.dataset.domainKey;
+    const group = domainGroups.find(g => g.domain === domainKey);
     if (!group) return;
 
     const urls      = group.tabs.map(t => t.url);
@@ -2653,7 +2717,7 @@ document.addEventListener('click', async (e) => {
     showToast(`已关闭「${groupLabel}」中的 ${urls.length} 个标签页`);
 
     const statTabs = document.getElementById('statTabs');
-    if (statTabs) statTabs.textContent = openTabs.length;
+    if (statTabs) statTabs.textContent = getRealTabs().length;
     return;
   }
 
@@ -2662,6 +2726,9 @@ document.addEventListener('click', async (e) => {
     const urlsEncoded = actionEl.dataset.dupeUrls || '';
     const urls = urlsEncoded.split(',').map(u => decodeURIComponent(u)).filter(Boolean);
     if (urls.length === 0) return;
+
+    const confirmed = window.confirm('确认关闭重复标签页，并为每个页面保留一个吗？');
+    if (!confirmed) return;
 
     await closeDuplicateTabs(urls, true);
     playCloseSound();
@@ -2695,9 +2762,13 @@ document.addEventListener('click', async (e) => {
 
   // ---- Close ALL open tabs ----
   if (action === 'close-all-open-tabs') {
-    const allUrls = openTabs
-      .filter(t => t.url && !t.url.startsWith('chrome') && !t.url.startsWith('about:'))
-      .map(t => t.url);
+    const realTabs = getRealTabs();
+    if (realTabs.length === 0) return;
+
+    const confirmed = window.confirm(`确认关闭全部 ${realTabs.length} 个标签页吗？此操作无法撤销。`);
+    if (!confirmed) return;
+
+    const allUrls = realTabs.map(t => t.url);
     await closeTabsByUrls(allUrls);
     playCloseSound();
 
@@ -2846,10 +2917,12 @@ document.addEventListener('pointercancel', () => {
   });
 });
 
-function getDeferredItemDropTarget(container, y) {
+function getDeferredItemDropTarget(container, x, y) {
   const items = [...container.querySelectorAll('.deferred-item:not(.dragging)')];
   return items.find(item => {
     const rect = item.getBoundingClientRect();
+    const isSameRow = y >= rect.top && y <= rect.bottom;
+    if (isSameRow) return x < rect.left + rect.width / 2;
     return y < rect.top + rect.height / 2;
   }) || null;
 }
@@ -2860,7 +2933,7 @@ document.addEventListener('pointerdown', (e) => {
   if (!handle || !isDeferredItemSorting) return;
 
   const item = handle.closest('.deferred-item');
-  const container = document.getElementById('deferredList');
+  const container = item ? item.closest('.deferred-group-card-items') : null;
   if (!item || !container) return;
 
   e.preventDefault();
@@ -2874,7 +2947,7 @@ document.addEventListener('pointermove', (e) => {
   if (!deferredItemDragState) return;
 
   const { item, container } = deferredItemDragState;
-  const dropTarget = getDeferredItemDropTarget(container, e.clientY);
+  const dropTarget = getDeferredItemDropTarget(container, e.clientX, e.clientY);
   if (dropTarget && dropTarget !== item) {
     container.insertBefore(item, dropTarget);
   } else if (!dropTarget) {
@@ -2998,6 +3071,7 @@ document.addEventListener('input', async (e) => {
    ---------------------------------------------------------------- */
 async function initializeDashboard() {
   await loadModulePrefs();
+  await purgeDismissedSavedTabs();
   installRealtimeTabRefresh();
   installRealtimeBookmarkRefresh();
   installAccessStatusRefresh();
