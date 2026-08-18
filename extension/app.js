@@ -1576,24 +1576,24 @@ function hideDeferredGroupTabs() {
 function renderDeferredRemarkFilters(group, selectedRemark, totalCount) {
   const safeGroupId = escapeHtml(group.id);
   const allActive = selectedRemark ? '' : ' active';
-  const disabled = isDeferredItemSorting ? ' disabled aria-disabled="true"' : '';
+  const editDisabled = isDeferredItemSorting ? ' disabled aria-disabled="true"' : '';
   const remarkButtons = buildDeferredRemarkCounts(group.items).map(([remark, count]) => {
     const safeRemark = escapeHtml(remark);
     const active = selectedRemark === remark ? ' active' : '';
 
     return `
       <span class="deferred-remark-filter-wrap">
-        <button class="deferred-remark-filter${active}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="${safeRemark}"${disabled}>
+        <button class="deferred-remark-filter${active}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="${safeRemark}">
           <span class="deferred-remark-label">${safeRemark}</span>
           <span class="deferred-remark-count">${count}</span>
         </button>
-        <button class="deferred-remark-edit" data-action="rename-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="重命名：${safeRemark}" aria-label="重命名 ${safeRemark}"${disabled}>✎</button>
+        <button class="deferred-remark-edit" data-action="rename-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="${safeRemark}" type="button" title="重命名：${safeRemark}" aria-label="重命名 ${safeRemark}"${editDisabled}>✎</button>
       </span>`;
   }).join('');
 
   return `
     <div class="deferred-remark-filters">
-      <button class="deferred-remark-filter is-all${allActive}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="" type="button"${disabled}>
+      <button class="deferred-remark-filter is-all${allActive}" data-action="filter-deferred-remark" data-deferred-group-id="${safeGroupId}" data-deferred-remark="" type="button">
         <span class="deferred-remark-label">全部</span>
         <span class="deferred-remark-count">${totalCount}</span>
       </button>
@@ -2410,7 +2410,6 @@ document.addEventListener('click', async (e) => {
       isDeferredItemSorting = false;
       showToast('稍后处理排序已保存');
     } else {
-      deferredRemarkFilters.clear();
       isDeferredItemSorting = true;
     }
     await renderDeferredColumn();
@@ -2421,7 +2420,6 @@ document.addEventListener('click', async (e) => {
   if (action === 'filter-deferred-remark') {
     e.preventDefault();
     e.stopPropagation();
-    if (isDeferredItemSorting) return;
 
     const groupId = actionEl.dataset.deferredGroupId;
     const remark = normalizeDeferredRemark(actionEl.dataset.deferredRemark);
